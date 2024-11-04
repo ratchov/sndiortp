@@ -758,14 +758,18 @@ main(int argc, char **argv)
 				goto bad_usage;
 			break;
 		default:
-		bad_usage:
-			fputs("usage: sndiorty [-b bits] [-l url] [-r rate] [url ...]\n", stderr);
-			exit(1);
+			goto bad_usage;
 		}
 	}
 
 	argc -= optind;
 	argv += optind;
+
+	if (!listen && argc == 0) {
+	bad_usage:
+		fputs("usage: sndiortp [-b bits] [-l url] [-r rate] [url ...]\n", stderr);
+		exit(1);
+	}
 
 	rtp_init(&rtp, host, port, listen);
 
