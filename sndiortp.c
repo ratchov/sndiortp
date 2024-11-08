@@ -35,24 +35,16 @@ struct rtp_hdr {
 	uint32_t ssrc;
 };
 
-struct rtp_pkt {
-	union {
-		struct rtp_hdr hdr;
-		unsigned char buf[RTP_MTU];
-	};
-	struct rtp_pkt *next;
-	unsigned char *data;
-	size_t nsamp;
-};
-
 struct rtp {
 	int fd;
 	struct rtp_src {
 		struct rtp_src *next;
-		struct rtp_pkt *head, **tail;
 		unsigned int seq, ts, ssrc;
 		unsigned int nch, bps;
 		int started;
+
+		int *buf;
+		size_t buf_start, buf_used, buf_len;
 	} *src_list;
 
 	struct rtp_dst {
@@ -75,38 +67,11 @@ int *rec_buf;
 size_t rec_size, rec_start, rec_end;
 unsigned int rec_nch;
 
-struct rtp_pkt *rtp_freelist;
 unsigned int rtp_bufsz;
 unsigned int rtp_bps;
 unsigned int rtp_nch;
 
 long long rtp_time;
-
-struct rtp_pkt *
-rtp_allocpkt(void)
-{
-	struct rtp_pkt *pkt;
-
-	pkt = rtp_freelist;
-	if (pkt != NULL)
-		rtp_freelist = pkt->next;
-	else {
-		pkt = malloc(sizeof(struct rtp_pkt));
-		if (pkt == NULL) {
-			perror("pkt");
-			exit(1);
-		}
-	}
-
-	return pkt;
-}
-
-void
-rtp_freepkt(struct rtp_pkt *pkt)
-{
-	pkt->next = rtp_freelist;
-	rtp_freelist = pkt;
-}
 
 struct rtp_src *
 rtp_mksrc(struct rtp *rtp, unsigned int ssrc, unsigned int seq, unsigned int ts)
@@ -126,8 +91,13 @@ rtp_mksrc(struct rtp *rtp, unsigned int ssrc, unsigned int seq, unsigned int ts)
 			src->seq = seq;
 			src->ts = ts;
 			src->started = 0;
-			src->head = NULL;
-			src->tail = &src->head;
+			src->buf_len = 2 * rtp_bufsz;
+			src->buf_start = src->buf_used = 0;
+			src->buf = malloc(src->buf_len * rtp_nch * sizeof(int));
+			if (src->buf == NULL) {
+				perror("src");
+				exit(1);
+			}
 			src->next = NULL;
 			src->nch = rtp_nch;
 			src->bps = rtp_bps;
@@ -208,18 +178,21 @@ rtp_mkdst(struct rtp *rtp, const char *host, const char *serv)
 int
 rtp_recvpkt(struct rtp *rtp)
 {
+	union {
+		struct rtp_hdr hdr;
+		unsigned char buf[RTP_MTU];
+	} u;
+	unsigned char *data;
 	struct rtp_src *src;
-	struct rtp_pkt *pkt;
 	struct msghdr msg;
 	struct iovec iov[1];
 	unsigned int flags, seq, ts, ssrc, ncsrc, version, type;
 	uint32_t hdrext;
 	ssize_t size;
-	size_t offs;
+	size_t offs, nsamp, end, avail, count, i, j;
+	int s, *p;
 
-	pkt = rtp_allocpkt();
-
-	iov[0].iov_base = pkt->buf;
+	iov[0].iov_base = u.buf;
 	iov[0].iov_len = RTP_MTU;
 
 	memset(&msg, 0, sizeof(msg));
@@ -232,10 +205,8 @@ rtp_recvpkt(struct rtp *rtp)
 
 	size = recvmsg(rtp->fd, &msg, MSG_DONTWAIT);
 	if (size == -1) {
-		if (errno == EAGAIN) {
-			rtp_freepkt(pkt);
+		if (errno == EAGAIN)
 			return 0;
-		}
 		fprintf(stderr, "recvmsg: %s\n", strerror(errno));
 		exit(1);
 	}
@@ -250,10 +221,10 @@ rtp_recvpkt(struct rtp *rtp)
 		exit(1);
 	}
 
-	flags = ntohs(pkt->hdr.flags);
-	seq = ntohs(pkt->hdr.seq);
-	ts = ntohl(pkt->hdr.ts);
-	ssrc = ntohl(pkt->hdr.ssrc);
+	flags = ntohs(u.hdr.flags);
+	seq = ntohs(u.hdr.seq);
+	ts = ntohl(u.hdr.ts);
+	ssrc = ntohl(u.hdr.ssrc);
 
 	ncsrc = (flags >> RTP_CSRC_COUNT) & RTP_CSRC_COUNT_MASK;
 	version = (flags >> RTP_VERSION) & RTP_VERSION_MASK;
@@ -277,42 +248,53 @@ rtp_recvpkt(struct rtp *rtp)
 	}
 
 	if (flags & (1 << RTP_EXTENSION)) {
-		hdrext = ntohl(*(uint32_t *)(pkt->buf + offs));
+		hdrext = ntohl(*(uint32_t *)(u.buf + offs));
 		offs += 4 * (hdrext & 0xffff);
 	}
 
 	src = rtp_mksrc(rtp, ssrc, seq, ts);
-	if (src == NULL) {
-		rtp_freepkt(pkt);
+	if (src == NULL)
 		return 1;
-	}
 
-	pkt->data = pkt->buf + offs;
-	pkt->nsamp = (size - offs) / (src->bps * src->nch);
+	data = u.buf + offs;
+	nsamp = (size - offs) / (src->bps * src->nch);
 
-	src->ts += pkt->nsamp;
+	src->ts += nsamp;
 	src->seq = (src->seq + 1) & 0xffff;
 
-	pkt->next = NULL;
-	*src->tail = pkt;
-	src->tail = &pkt->next;
+	while (nsamp > 0) {
 
-	if (verbose >= 2)
-		fprintf(stderr, "ssrc 0x%x: pkt %d, ts = %u\n", ssrc, seq, ts);
+		if (src->buf_used >= src->buf_len) {
+			fprintf(stderr, "ssrc 0x%x: overflow\n", src->ssrc);
+			exit(1);
+		}
+
+		end = src->buf_start + src->buf_used;
+		if (end >= src->buf_len)
+			end -= src->buf_len;
+		avail = src->buf_len - src->buf_used;
+		count = src->buf_len - end;
+		if (count > avail)
+			count = avail;
+		if (count > nsamp)
+			count = nsamp;
+		p = src->buf + end * src->nch;
+
+		for (i = count; i > 0; i--) {
+			for (j = src->nch; j > 0; j--) {
+				s = data[0] << 24 | data[1] << 16;
+				if (src->bps == 3)
+					s |= data[2] << 8;
+				data += src->bps;
+				(*p++) = s;
+			}
+		}
+
+		nsamp -= count;
+		src->buf_used += count;
+	}
 
 	return 1;
-}
-
-size_t
-rtp_qlen(struct rtp_src *src)
-{
-	struct rtp_pkt *pkt;
-	size_t nsamp = 0;
-
-	for (pkt = src->head; pkt != NULL; pkt = pkt->next)
-		nsamp += pkt->nsamp;
-
-	return nsamp;
 }
 
 void
@@ -390,15 +372,13 @@ rtp_sendblk(struct rtp *rtp, unsigned char *data, unsigned int blksz)
 }
 
 int
-rtp_mixsrc(struct rtp_src *src, void *mixbuf, size_t count)
+rtp_mixsrc(struct rtp_src *src, void *mixbuf, size_t todo)
 {
-	size_t nsamp, todo;
-	struct rtp_pkt *pkt;
-	int s, *p;
-	size_t i, j;
+	size_t count, i, j;
+	int *p, *q;
 
 	if (!src->started) {
-		if (rtp_qlen(src) < rtp_bufsz)
+		if (src->buf_used < rtp_bufsz)
 			return 1;
 		if (verbose >= 2)
 			fprintf(stderr, "ssrc 0x%x: started\n", src->ssrc);
@@ -406,39 +386,33 @@ rtp_mixsrc(struct rtp_src *src, void *mixbuf, size_t count)
 	}
 
 	p = mixbuf;
-	todo = count;
 
 	while (todo > 0) {
-		pkt = src->head;
-		if (pkt == NULL) {
+		if (src->buf_used == 0) {
 			if (verbose)
 				fprintf(stderr, "ssrc 0x%x: stopped\n", src->ssrc);
 			return 0;
 		}
 
-		nsamp = pkt->nsamp;
-		if (nsamp > todo)
-			nsamp = todo;
+		count = src->buf_len - src->buf_start;
+		if (count > src->buf_used)
+			count = src->buf_used;
+		if (count > todo)
+			count = todo;
+		q = src->buf + src->buf_start * src->nch;
 
-		for (i = nsamp; i > 0; i--) {
-			for (j = src->nch; j > 0; j--) {
-				s = pkt->data[0] << 24 | pkt->data[1] << 16;
-				if (src->bps == 3)
-					s |= pkt->data[2] << 8;
-				pkt->data += src->bps;
-				(*p++) += s;
-			}
+		for (i = count; i > 0; i--) {
+			for (j = src->nch; j > 0; j--)
+				*p++ = *q++;
 			p += play_nch - src->nch;
 		}
-		todo -= nsamp;
 
-		pkt->nsamp -= nsamp;
-		if (pkt->nsamp == 0) {
-			src->head = pkt->next;
-			if (src->head == NULL)
-				src->tail = &src->head;
-			rtp_freepkt(pkt);
-		}
+		src->buf_used -= count;
+		src->buf_start += count;
+		if (src->buf_start >= src->buf_len)
+			src->buf_start -= src->buf_len;
+
+		todo -= count;
 	}
 	return 1;
 }
@@ -738,7 +712,6 @@ int
 main(int argc, char **argv)
 {
 	struct rtp rtp;
-	struct rtp_pkt *pkt;
 	unsigned int bits = 24, rate = 48000, bufsz = 2400;
 	char host[NI_MAXHOST], port[NI_MAXSERV];
 	int listen = 0, c;
@@ -789,7 +762,6 @@ main(int argc, char **argv)
 
 	rtp_init(&rtp, host, port, listen);
 
-	rtp_freelist = NULL;
 	rtp_bufsz = bufsz;
 	rtp_bps = bits / 8;
 	rtp_nch = 2;
@@ -803,14 +775,6 @@ main(int argc, char **argv)
 	}
 
 	rtp_loop(&rtp, SIO_DEVANY, rate, listen);
-
-	/*
-	 * free packets on the freelist
-	 */
-	while ((pkt = rtp_freelist) != NULL) {
-		rtp_freelist = pkt->next;
-		free(pkt);
-	}
 
 	return 0;
 }
