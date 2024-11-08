@@ -9,6 +9,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <sys/mman.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -603,17 +604,20 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, int listen)
 		rtp->src_freelist = src;
 	}
 
-	if (!sio_start(hdl)) {
-		fprintf(stderr, "%s: failed to start\n", dev);
-		goto err_close;
-	}
-
 	fprintf(stderr, "device period: %d samples\n", par.round);
 	fprintf(stderr, "device buffer: %d samples\n", par.bufsz);
 	fprintf(stderr, "packet buffer: %d samples\n", rtp_bufsz);
 	fprintf(stderr, "mode:%s%s\n",
 	  (mode & SIO_PLAY) ? " play" : "",
 	  (mode & SIO_REC) ? " rec" : "");
+
+	if (mlockall(MCL_CURRENT | MCL_FUTURE) == -1)
+		perror("src");
+
+	if (!sio_start(hdl)) {
+		fprintf(stderr, "%s: failed to start\n", dev);
+		goto err_close;
+	}
 
 	while (1) {
 		pfds[0].fd = rtp->fd;
