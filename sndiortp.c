@@ -127,7 +127,8 @@ rtp_mksrc(struct rtp *rtp, unsigned int ssrc, unsigned int seq, unsigned int ts)
 			src->nch = rtp_nch;
 			src->bps = rtp_bps;
 			*psrc = src;
-			fprintf(stderr, "ssrc 0x%x: created\n", src->ssrc);
+			if (verbose)
+				fprintf(stderr, "ssrc 0x%x: created\n", src->ssrc);
 			return src;
 		}
 		if (src->ssrc == ssrc)
@@ -136,14 +137,16 @@ rtp_mksrc(struct rtp *rtp, unsigned int ssrc, unsigned int seq, unsigned int ts)
 	}
 
 	if (seq != src->seq) {
-		fprintf(stderr, "ssrc 0x%x: %u: bad seq number (expected %u)\n",
-		    src->ssrc, seq, src->seq);
+		if (verbose)
+			fprintf(stderr, "ssrc 0x%x: %u: bad seq number (expected %u)\n",
+			    src->ssrc, seq, src->seq);
 		goto err_drop;
 	}
 
 	if (ts != src->ts) {
-		fprintf(stderr, "ssrc 0x%x: %u: bad time-stamp (expected %u)\n",
-		    src->ssrc, ts, src->ts);
+		if (verbose)
+			fprintf(stderr, "ssrc 0x%x: %u: bad time-stamp (expected %u)\n",
+			    src->ssrc, ts, src->ts);
 		goto err_drop;
 	}
 
@@ -289,7 +292,7 @@ rtp_recvpkt(struct rtp *rtp)
 	*src->tail = pkt;
 	src->tail = &pkt->next;
 
-	if (verbose)
+	if (verbose >= 2)
 		fprintf(stderr, "ssrc 0x%x: pkt %d, ts = %u\n", ssrc, seq, ts);
 
 	return 1;
@@ -353,7 +356,7 @@ rtp_sendpkt(struct rtp *rtp, void *data, unsigned int count)
 		}
 	}
 
-	if (verbose)
+	if (verbose >= 2)
 		fprintf(stderr, "sent %d samples\n", count);
 }
 
@@ -367,7 +370,7 @@ rtp_sendblk(struct rtp *rtp, unsigned char *data, unsigned int blksz)
 	maxsamp = RTP_MAXDATA / bpf;
 	npkt = (blksz + maxsamp - 1) / maxsamp;
 
-	if (verbose)
+	if (verbose >= 2)
 		fprintf(stderr, "sending %d bytes (%d pkts)\n", blksz * bpf, npkt);
 
 	pktsz = (blksz + npkt - 1) / npkt;
@@ -393,7 +396,8 @@ rtp_mixsrc(struct rtp_src *src, void *mixbuf, size_t count)
 	if (!src->started) {
 		if (rtp_qlen(src) < rtp_bufsz)
 			return 1;
-		fprintf(stderr, "ssrc 0x%x: started\n", src->ssrc);
+		if (verbose >= 2)
+			fprintf(stderr, "ssrc 0x%x: started\n", src->ssrc);
 		src->started = 1;
 	}
 
@@ -403,7 +407,8 @@ rtp_mixsrc(struct rtp_src *src, void *mixbuf, size_t count)
 	while (todo > 0) {
 		pkt = src->head;
 		if (pkt == NULL) {
-			fprintf(stderr, "ssrc 0x%x: stopped\n", src->ssrc);
+			if (verbose)
+				fprintf(stderr, "ssrc 0x%x: stopped\n", src->ssrc);
 			return 0;
 		}
 		data = pkt->data;
