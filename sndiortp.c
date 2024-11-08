@@ -80,6 +80,8 @@ unsigned int rtp_bufsz;
 unsigned int rtp_bps;
 unsigned int rtp_nch;
 
+long long rtp_time;
+
 struct rtp_pkt *
 rtp_allocpkt(void)
 {
@@ -513,6 +515,7 @@ rtp_init(struct rtp *rtp, const char *host, const char *serv, int listen)
 void
 rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, int listen)
 {
+	struct timespec ts;
 	unsigned char *data, *p;
 	struct pollfd *pfds;
 	struct sio_hdl *hdl;
@@ -632,6 +635,12 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, int listen)
 			perror("poll");
 			exit(1);
 		}
+
+		if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1) {
+			fprintf(stderr, "clock_gettime: %s\n", strerror(errno));
+			exit(1);
+		}
+		rtp_time = 1000000000LL * ts.tv_sec + ts.tv_nsec;
 
 		if (pfds[0].revents & POLLIN)
 			rtp_recvpkt(rtp);
