@@ -19,6 +19,7 @@
 #define RTP_MTU			(1500 - 8 - 12)
 #define RTP_MAXDATA		(RTP_MTU - 20)
 #define RTP_DEFAULT_PORT	"5004"
+#define RTP_MAXSRC		64
 
 struct rtp_hdr {
 #define RTP_VERSION		14
@@ -46,7 +47,7 @@ struct rtp {
 
 		int *buf;
 		size_t buf_start, buf_used, buf_len;
-	} *src_list;
+	} *src_list, *src_freelist;
 
 	struct rtp_dst {
 		struct rtp_dst *next;
@@ -83,22 +84,18 @@ rtp_mksrc(struct rtp *rtp, unsigned int ssrc, unsigned int seq, unsigned int ts)
 	while (1) {
 		src = *psrc;
 		if (src == NULL) {
-			src = malloc(sizeof(struct rtp_src));
+			src = rtp->src_freelist;
 			if (src == NULL) {
-				perror("src");
+				fprintf(stderr, "out of free src structures\n");
 				exit(1);
 			}
+			rtp->src_freelist = src->next;
+
 			src->ssrc = ssrc;
 			src->seq = seq;
 			src->ts = ts;
 			src->started = 0;
-			src->buf_len = 2 * rtp_bufsz;
 			src->buf_start = src->buf_used = 0;
-			src->buf = malloc(src->buf_len * rtp_nch * sizeof(int));
-			if (src->buf == NULL) {
-				perror("src");
-				exit(1);
-			}
 			src->next = NULL;
 			src->nch = rtp_nch;
 			src->bps = rtp_bps;
@@ -130,7 +127,8 @@ rtp_mksrc(struct rtp *rtp, unsigned int ssrc, unsigned int seq, unsigned int ts)
 
 err_drop:
 	*psrc = src->next;
-	free(src);
+	src->next = rtp->src_freelist;
+	rtp->src_freelist = src;
 	return NULL;
 }
 
@@ -488,7 +486,7 @@ rtp_init(struct rtp *rtp, const char *host, const char *serv, int listen)
 	}
 
 	rtp->fd = fd;
-	rtp->src_list = NULL;
+	rtp->src_list = rtp->src_freelist = NULL;
 	rtp->dst_list = NULL;
 
 	return 1;
@@ -497,6 +495,7 @@ rtp_init(struct rtp *rtp, const char *host, const char *serv, int listen)
 void
 rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, int listen)
 {
+	struct rtp_src *src;
 	struct timespec ts;
 	unsigned char *data, *p;
 	struct pollfd *pfds;
@@ -582,16 +581,32 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, int listen)
 		}
 	}
 
-	if (!sio_start(hdl)) {
-		fprintf(stderr, "%s: failed to start\n", dev);
-		goto err_close;
-	}
-
 	if (rtp_bufsz < par.rate / 20)
 		rtp_bufsz = par.rate / 20;
 	if (rtp_bufsz < par.bufsz + par.round * 4)
 		rtp_bufsz = par.bufsz + par.round * 4;
 	rtp->rate = par.rate;
+
+	for (i = 0; i < RTP_MAXSRC; i++) {
+		src = malloc(sizeof(struct rtp_src));
+		if (src == NULL) {
+			perror("src");
+			exit(1);
+		}
+		src->buf_len = 2 * rtp_bufsz;
+		src->buf = malloc(src->buf_len * rtp_nch * sizeof(int));
+		if (src->buf == NULL) {
+			perror("src");
+			exit(1);
+		}
+		src->next = rtp->src_freelist;
+		rtp->src_freelist = src;
+	}
+
+	if (!sio_start(hdl)) {
+		fprintf(stderr, "%s: failed to start\n", dev);
+		goto err_close;
+	}
 
 	fprintf(stderr, "device period: %d samples\n", par.round);
 	fprintf(stderr, "device buffer: %d samples\n", par.bufsz);
@@ -670,6 +685,17 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, int listen)
 
 err_close:
 	sio_close(hdl);
+
+	while ((src = rtp->src_list) != NULL) {
+		rtp->src_list = src->next;
+		src->next = rtp->src_freelist;
+		rtp->src_freelist = src;
+	}
+	while ((src = rtp->src_freelist) != NULL) {
+		rtp->src_freelist = src->next;
+		free(src->buf);
+		free(src);
+	}
 }
 
 int
