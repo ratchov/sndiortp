@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <poll.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -375,6 +376,7 @@ int
 rtp_mixsrc(struct rtp_src *src, void *mixbuf, size_t todo)
 {
 	size_t count, i, j;
+	long long s;
 	int *p, *q;
 
 	if (!src->started) {
@@ -402,8 +404,16 @@ rtp_mixsrc(struct rtp_src *src, void *mixbuf, size_t todo)
 		q = src->buf + src->buf_start * src->nch;
 
 		for (i = count; i > 0; i--) {
-			for (j = src->nch; j > 0; j--)
-				*p++ = *q++;
+			for (j = src->nch; j > 0; j--) {
+				s = *p + *q;
+				if (s > INT_MAX)
+					s = INT_MAX;
+				if (s < -INT_MAX)
+					s = -INT_MAX;
+				*p = s;
+				p++;
+				q++;
+			}
 			p += play_nch - src->nch;
 		}
 
