@@ -54,12 +54,15 @@ struct rtp {
 		unsigned int nch, bps;
 		int started;
 	} *src_list;
+
 	struct rtp_dst {
 		struct rtp_dst *next;
 		struct sockaddr_storage sa;
 		socklen_t salen;
 		unsigned int seq, ts, ssrc;
 	} *dst_list;
+
+	int rate;
 };
 
 int verbose;
@@ -603,6 +606,7 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, int listen)
 		rtp_bufsz = par.rate / 20;
 	if (rtp_bufsz < par.bufsz + par.round * 4)
 		rtp_bufsz = par.bufsz + par.round * 4;
+	rtp->rate = par.rate;
 
 	fprintf(stderr, "device period: %d samples\n", par.round);
 	fprintf(stderr, "device buffer: %d samples\n", par.bufsz);
