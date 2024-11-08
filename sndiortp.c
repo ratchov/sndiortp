@@ -41,8 +41,8 @@ struct rtp_pkt {
 		unsigned char buf[RTP_MTU];
 	};
 	struct rtp_pkt *next;
-	void *data;
-	size_t size;
+	unsigned char *data;
+	size_t nsamp;
 };
 
 struct rtp {
@@ -288,9 +288,9 @@ rtp_recvpkt(struct rtp *rtp)
 	}
 
 	pkt->data = pkt->buf + offs;
-	pkt->size = size - offs;
+	pkt->nsamp = (size - offs) / (src->bps * src->nch);
 
-	src->ts += pkt->size / (src->bps * src->nch);
+	src->ts += pkt->nsamp;
 	src->seq = (src->seq + 1) & 0xffff;
 
 	pkt->next = NULL;
@@ -307,12 +307,12 @@ size_t
 rtp_qlen(struct rtp_src *src)
 {
 	struct rtp_pkt *pkt;
-	size_t size = 0;
+	size_t nsamp = 0;
 
 	for (pkt = src->head; pkt != NULL; pkt = pkt->next)
-		size += pkt->size;
+		nsamp += pkt->nsamp;
 
-	return size / (src->bps * src->nch);
+	return nsamp;
 }
 
 void
@@ -392,8 +392,7 @@ rtp_sendblk(struct rtp *rtp, unsigned char *data, unsigned int blksz)
 int
 rtp_mixsrc(struct rtp_src *src, void *mixbuf, size_t count)
 {
-	size_t size, todo;
-	unsigned char *data;
+	size_t nsamp, todo;
 	struct rtp_pkt *pkt;
 	int s, *p;
 	size_t i, j;
@@ -407,7 +406,7 @@ rtp_mixsrc(struct rtp_src *src, void *mixbuf, size_t count)
 	}
 
 	p = mixbuf;
-	todo = count * src->bps * src->nch;
+	todo = count;
 
 	while (todo > 0) {
 		pkt = src->head;
@@ -416,26 +415,25 @@ rtp_mixsrc(struct rtp_src *src, void *mixbuf, size_t count)
 				fprintf(stderr, "ssrc 0x%x: stopped\n", src->ssrc);
 			return 0;
 		}
-		data = pkt->data;
-		size = pkt->size;
-		if (size > todo)
-			size = todo;
 
-		for (i = size / (src->bps * src->nch); i > 0; i--) {
+		nsamp = pkt->nsamp;
+		if (nsamp > todo)
+			nsamp = todo;
+
+		for (i = nsamp; i > 0; i--) {
 			for (j = src->nch; j > 0; j--) {
-				s = data[0] << 24 | data[1] << 16;
+				s = pkt->data[0] << 24 | pkt->data[1] << 16;
 				if (src->bps == 3)
-					s |= data[2] << 8;
-				data += src->bps;
+					s |= pkt->data[2] << 8;
+				pkt->data += src->bps;
 				(*p++) += s;
 			}
 			p += play_nch - src->nch;
 		}
-		todo -= size;
+		todo -= nsamp;
 
-		pkt->data += size;
-		pkt->size -= size;
-		if (pkt->size == 0) {
+		pkt->nsamp -= nsamp;
+		if (pkt->nsamp == 0) {
 			src->head = pkt->next;
 			if (src->head == NULL)
 				src->tail = &src->head;
