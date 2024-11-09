@@ -306,6 +306,7 @@ rtp_sendpkt(struct rtp *rtp, void *data, unsigned int count)
 	struct iovec iov[2];
 	size_t size;
 	ssize_t n;
+	int dropped = 0;
 
 	for (dst = rtp->dst_list; dst != NULL; dst = dst->next) {
 
@@ -332,17 +333,24 @@ rtp_sendpkt(struct rtp *rtp, void *data, unsigned int count)
 		msg.msg_iov = iov;
 		msg.msg_iovlen = 2;
 
-		n = sendmsg(rtp->fd, &msg, 0);
+		n = sendmsg(rtp->fd, &msg, MSG_DONTWAIT);
 		if (n == -1) {
-			fprintf(stderr, "sendmsg: %s\n", strerror(errno));
-			exit(1);
+			if (errno != EAGAIN) {
+				fprintf(stderr, "sendmsg: %s\n", strerror(errno));
+				exit(1);
+			}
+			dropped++;
+			continue;
 		}
 		if (msg.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) {
 			fprintf(stderr, "sendmsg: truncated\n");
 			exit(1);
 		}
 	}
-
+	if (dropped > 0) {
+		if (verbose)
+			fprintf(stderr, "dropped %d pkts\n", dropped);
+	}
 	if (verbose >= 2)
 		fprintf(stderr, "sent %d samples\n", count);
 }
