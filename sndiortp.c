@@ -464,6 +464,11 @@ rtp_init(struct rtp *rtp, const char *host, const char *serv, int listen)
 		exit(1);
 	}
 
+	if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1) {
+		fprintf(stderr, "fcntl: O_NONBLOCK: %s\n", strerror(errno));
+		exit(1);
+	}
+
 	tos = IPTOS_LOWDELAY;
 	if (setsockopt(fd, IPPROTO_IP, IP_TOS, &tos, sizeof(tos)) == -1) {
 		fprintf(stderr, "setsockopt: IP_TOS: %s\n", strerror(errno));
