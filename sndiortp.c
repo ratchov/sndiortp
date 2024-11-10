@@ -77,60 +77,64 @@ unsigned int rtp_nch;
 long long rtp_time;
 
 struct rtp_src *
-rtp_mksrc(struct rtp *rtp, unsigned int ssrc, unsigned int seq, unsigned int ts)
+rtp_addsrc(struct rtp *rtp, unsigned int ssrc, unsigned int seq, unsigned int ts)
 {
-	struct rtp_src *src, **psrc;
+	struct rtp_src *src;
+
+	src = rtp->src_freelist;
+	if (src == NULL) {
+		fprintf(stderr, "out of free src structures\n");
+		exit(1);
+	}
+
+	rtp->src_freelist = src->next;
+	src->ssrc = ssrc;
+	src->seq = seq;
+	src->ts = ts;
+	src->started = 0;
+	src->buf_start = src->buf_used = 0;
+	src->nch = rtp_nch;
+	src->bps = rtp_bps;
+	src->next = rtp->src_list;
+	rtp->src_list = src;
+	if (verbose >= 2)
+		fprintf(stderr, "ssrc 0x%x: created\n", src->ssrc);
+	return src;
+}
+
+void
+rtp_dropsrc(struct rtp *rtp, struct rtp_src *src)
+{
+	struct rtp_src **psrc;
 
 	psrc = &rtp->src_list;
 	while (1) {
-		src = *psrc;
 		if (src == NULL) {
-			src = rtp->src_freelist;
-			if (src == NULL) {
-				fprintf(stderr, "out of free src structures\n");
-				exit(1);
-			}
-			rtp->src_freelist = src->next;
-
-			src->ssrc = ssrc;
-			src->seq = seq;
-			src->ts = ts;
-			src->started = 0;
-			src->buf_start = src->buf_used = 0;
-			src->next = NULL;
-			src->nch = rtp_nch;
-			src->bps = rtp_bps;
-			*psrc = src;
-			if (verbose)
-				fprintf(stderr, "ssrc 0x%x: created\n", src->ssrc);
-			return src;
+			fprintf(stderr, "ssrc 0x%x: not found\n", src->ssrc);
+			exit(1);
 		}
+		if (src == *psrc) {
+			*psrc = src->next;
+			src->next = rtp->src_freelist;
+			rtp->src_freelist = src;
+			if (verbose >= 2)
+				fprintf(stderr, "ssrc 0x%x: dropped\n", src->ssrc);
+			break;
+		}
+		psrc = &(*psrc)->next;
+	}
+}
+
+struct rtp_src *
+rtp_findsrc(struct rtp *rtp, unsigned int ssrc)
+{
+	struct rtp_src *src;
+
+	for (src = rtp->src_list; src != NULL; src = src->next) {
 		if (src->ssrc == ssrc)
 			break;
-		psrc = &src->next;
 	}
-
-	if (seq != src->seq) {
-		if (verbose)
-			fprintf(stderr, "ssrc 0x%x: %u: bad seq number (expected %u)\n",
-			    src->ssrc, seq, src->seq);
-		goto err_drop;
-	}
-
-	if (ts != src->ts) {
-		if (verbose)
-			fprintf(stderr, "ssrc 0x%x: %u: bad time-stamp (expected %u)\n",
-			    src->ssrc, ts, src->ts);
-		goto err_drop;
-	}
-
 	return src;
-
-err_drop:
-	*psrc = src->next;
-	src->next = rtp->src_freelist;
-	rtp->src_freelist = src;
-	return NULL;
 }
 
 int
@@ -252,9 +256,24 @@ rtp_recvpkt(struct rtp *rtp)
 		offs += 4 * (hdrext & 0xffff);
 	}
 
-	src = rtp_mksrc(rtp, ssrc, seq, ts);
-	if (src == NULL)
-		return 1;
+	src = rtp_findsrc(rtp, ssrc);
+	if (src != NULL) {
+		if (seq != src->seq) {
+			if (verbose)
+				fprintf(stderr, "ssrc 0x%x: %u: bad seq number (expected %u)\n",
+				    src->ssrc, seq, src->seq);
+			rtp_dropsrc(rtp, src);
+			return 1;
+		}
+		if (ts != src->ts) {
+			if (verbose)
+				fprintf(stderr, "ssrc 0x%x: %u: bad time-stamp (expected %u)\n",
+				    src->ssrc, ts, src->ts);
+			rtp_dropsrc(rtp, src);
+			return 1;
+		}
+	} else
+		src = rtp_addsrc(rtp, ssrc, seq, ts);
 
 	data = u.buf + offs;
 	nsamp = (size - offs) / (src->bps * src->nch);
@@ -265,8 +284,10 @@ rtp_recvpkt(struct rtp *rtp)
 	while (nsamp > 0) {
 
 		if (src->buf_used >= src->buf_len) {
-			fprintf(stderr, "ssrc 0x%x: overflow\n", src->ssrc);
-			exit(1);
+			if (verbose)
+				fprintf(stderr, "ssrc 0x%x: overflow\n", src->ssrc);
+			rtp_dropsrc(rtp, src);
+			return 1;
 		}
 
 		end = src->buf_start + src->buf_used;
@@ -379,8 +400,8 @@ rtp_sendblk(struct rtp *rtp, unsigned char *data, unsigned int blksz)
 	}
 }
 
-int
-rtp_mixsrc(struct rtp_src *src, void *mixbuf, size_t todo)
+void
+rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, void *mixbuf, size_t todo)
 {
 	size_t count, i, j;
 	long long s;
@@ -388,8 +409,8 @@ rtp_mixsrc(struct rtp_src *src, void *mixbuf, size_t todo)
 
 	if (!src->started) {
 		if (src->buf_used < rtp_bufsz)
-			return 1;
-		if (verbose >= 2)
+			return;
+		if (verbose)
 			fprintf(stderr, "ssrc 0x%x: started\n", src->ssrc);
 		src->started = 1;
 	}
@@ -400,7 +421,8 @@ rtp_mixsrc(struct rtp_src *src, void *mixbuf, size_t todo)
 		if (src->buf_used == 0) {
 			if (verbose)
 				fprintf(stderr, "ssrc 0x%x: stopped\n", src->ssrc);
-			return 0;
+			rtp_dropsrc(rtp, src);
+			break;
 		}
 
 		count = src->buf_len - src->buf_start;
@@ -431,24 +453,18 @@ rtp_mixsrc(struct rtp_src *src, void *mixbuf, size_t todo)
 
 		todo -= count;
 	}
-	return 1;
 }
 
 void
 rtp_mixbuf(struct rtp *rtp, void *mixbuf, size_t count)
 {
-	struct rtp_src *src, **psrc;
+	struct rtp_src *src, *srcnext;
 
 	memset(mixbuf, 0, count * play_nch * sizeof(int));
 
-	psrc = &rtp->src_list;
-	while ((src = *psrc) != NULL) {
-		if (rtp_mixsrc(src, mixbuf, count))
-			psrc = &src->next;
-		else {
-			*psrc = src->next;
-			free(src);
-		}
+	for (src = rtp->src_list; src != NULL; src = srcnext) {
+		srcnext = src->next;
+		rtp_mixsrc(rtp, src, mixbuf, count);
 	}
 }
 
