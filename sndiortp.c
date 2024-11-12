@@ -2,6 +2,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <poll.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -74,7 +75,32 @@ unsigned int rtp_bufsz;
 unsigned int rtp_bps;
 unsigned int rtp_nch;
 
-long long rtp_time;
+long long rtp_time, rtp_time_base;
+
+void logx(const char *fmt, ...)
+{
+	char buf[128];
+	char *p = buf, *end = buf + sizeof(buf);
+	size_t size;
+	va_list ap;
+	int save_errno = errno;
+
+	size = p < end ? end - p : 0;
+	p += snprintf(p, size, "%010lld.%09llu: ", rtp_time / 1000000000, rtp_time % 1000000000);
+
+	va_start(ap, fmt);
+	size = p < end ? end - p : 0;
+	p += vsnprintf(p, size, fmt, ap);
+	va_end(ap);
+
+	if (p >= end)
+		p = end - 1;
+
+	*p++ = '\n';
+	write(STDERR_FILENO, buf, p - buf);
+
+	errno = save_errno;
+}
 
 struct rtp_src *
 rtp_addsrc(struct rtp *rtp, unsigned int ssrc, unsigned int seq, unsigned int ts)
@@ -83,7 +109,7 @@ rtp_addsrc(struct rtp *rtp, unsigned int ssrc, unsigned int seq, unsigned int ts
 
 	src = rtp->src_freelist;
 	if (src == NULL) {
-		fprintf(stderr, "out of free src structures\n");
+		logx("out of free src structures");
 		exit(1);
 	}
 
@@ -98,7 +124,7 @@ rtp_addsrc(struct rtp *rtp, unsigned int ssrc, unsigned int seq, unsigned int ts
 	src->next = rtp->src_list;
 	rtp->src_list = src;
 	if (verbose >= 2)
-		fprintf(stderr, "ssrc 0x%x: created\n", src->ssrc);
+		logx("ssrc 0x%x: created", src->ssrc);
 	return src;
 }
 
@@ -110,7 +136,7 @@ rtp_dropsrc(struct rtp *rtp, struct rtp_src *src)
 	psrc = &rtp->src_list;
 	while (1) {
 		if (src == NULL) {
-			fprintf(stderr, "ssrc 0x%x: not found\n", src->ssrc);
+			logx("ssrc 0x%x: not found", src->ssrc);
 			exit(1);
 		}
 		if (src == *psrc) {
@@ -118,7 +144,7 @@ rtp_dropsrc(struct rtp *rtp, struct rtp_src *src)
 			src->next = rtp->src_freelist;
 			rtp->src_freelist = src;
 			if (verbose >= 2)
-				fprintf(stderr, "ssrc 0x%x: dropped\n", src->ssrc);
+				logx("ssrc 0x%x: dropped", src->ssrc);
 			break;
 		}
 		psrc = &(*psrc)->next;
@@ -150,13 +176,13 @@ rtp_mkdst(struct rtp *rtp, const char *host, const char *serv)
 	aihints.ai_protocol = IPPROTO_UDP;
 	error = getaddrinfo(host, serv, &aihints, &ailist);
 	if (error) {
-		fprintf(stderr, "getaddrinfo: %s: %s\n", host, gai_strerror(error));
+		logx("getaddrinfo: %s: %s", host, gai_strerror(error));
 		exit(1);
 	}
 
 	ai = ailist;
 	if (ai == NULL) {
-		fprintf(stderr, "getaddrinfo: %s: no IP address\n", host);
+		logx("getaddrinfo: %s: no IP address", host);
 		exit(1);
 	}
 
@@ -211,17 +237,17 @@ rtp_recvpkt(struct rtp *rtp)
 	if (size == -1) {
 		if (errno == EAGAIN)
 			return 0;
-		fprintf(stderr, "recvmsg: %s\n", strerror(errno));
+		logx("recvmsg: %s", strerror(errno));
 		exit(1);
 	}
 
 	if (msg.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) {
-		fprintf(stderr, "recvmsg: truncated\n");
+		logx("recvmsg: truncated");
 		exit(1);
 	}
 
 	if (size < sizeof(struct rtp_hdr)) {
-		fprintf(stderr, "%zd: pkt size too short\n", size);
+		logx("%zd: pkt size too short", size);
 		exit(1);
 	}
 
@@ -237,17 +263,17 @@ rtp_recvpkt(struct rtp *rtp)
 	offs = sizeof(struct rtp_hdr) + 4 * ncsrc;
 
 	if (version != 2) {
-		fprintf(stderr, "%d: unsupported version\n", version);
+		logx("%d: unsupported version", version);
 		exit(1);
 	}
 
 	if (type != 96) {
-		fprintf(stderr, "%d: unexpected payload type\n", type);
+		logx("%d: unexpected payload type", type);
 		exit(1);
 	}
 
 	if (flags & (1 << RTP_PADDING)) {
-		fprintf(stderr, "rtp padding not supported\n");
+		logx("rtp padding not supported");
 		exit(1);
 	}
 
@@ -260,14 +286,14 @@ rtp_recvpkt(struct rtp *rtp)
 	if (src != NULL) {
 		if (seq != src->seq) {
 			if (verbose)
-				fprintf(stderr, "ssrc 0x%x: %u: bad seq number (expected %u)\n",
+				logx("ssrc 0x%x: %u: bad seq number (expected %u)",
 				    src->ssrc, seq, src->seq);
 			rtp_dropsrc(rtp, src);
 			return 1;
 		}
 		if (ts != src->ts) {
 			if (verbose)
-				fprintf(stderr, "ssrc 0x%x: %u: bad time-stamp (expected %u)\n",
+				logx("ssrc 0x%x: %u: bad time-stamp (expected %u)",
 				    src->ssrc, ts, src->ts);
 			rtp_dropsrc(rtp, src);
 			return 1;
@@ -285,7 +311,7 @@ rtp_recvpkt(struct rtp *rtp)
 
 		if (src->buf_used >= src->buf_len) {
 			if (verbose)
-				fprintf(stderr, "ssrc 0x%x: overflow\n", src->ssrc);
+				logx("ssrc 0x%x: overflow", src->ssrc);
 			rtp_dropsrc(rtp, src);
 			return 1;
 		}
@@ -357,23 +383,23 @@ rtp_sendpkt(struct rtp *rtp, void *data, unsigned int count)
 		n = sendmsg(rtp->fd, &msg, MSG_DONTWAIT);
 		if (n == -1) {
 			if (errno != EAGAIN) {
-				fprintf(stderr, "sendmsg: %s\n", strerror(errno));
+				logx("sendmsg: %s", strerror(errno));
 				exit(1);
 			}
 			dropped++;
 			continue;
 		}
 		if (msg.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) {
-			fprintf(stderr, "sendmsg: truncated\n");
+			logx("sendmsg: truncated");
 			exit(1);
 		}
 	}
 	if (dropped > 0) {
 		if (verbose)
-			fprintf(stderr, "dropped %d pkts\n", dropped);
+			logx("dropped %d pkts", dropped);
 	}
 	if (verbose >= 2)
-		fprintf(stderr, "sent %d samples\n", count);
+		logx("sent %d samples", count);
 }
 
 void
@@ -387,7 +413,7 @@ rtp_sendblk(struct rtp *rtp, unsigned char *data, unsigned int blksz)
 	npkt = (blksz + maxsamp - 1) / maxsamp;
 
 	if (verbose >= 2)
-		fprintf(stderr, "sending %d bytes (%d pkts)\n", blksz * bpf, npkt);
+		logx("sending %d bytes (%d pkts)", blksz * bpf, npkt);
 
 	pktsz = (blksz + npkt - 1) / npkt;
 	nsamp = blksz;
@@ -411,7 +437,7 @@ rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, void *mixbuf, size_t todo)
 		if (src->buf_used < rtp_bufsz)
 			return;
 		if (verbose)
-			fprintf(stderr, "ssrc 0x%x: started\n", src->ssrc);
+			logx("ssrc 0x%x: started", src->ssrc);
 		src->started = 1;
 	}
 
@@ -420,7 +446,7 @@ rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, void *mixbuf, size_t todo)
 	while (todo > 0) {
 		if (src->buf_used == 0) {
 			if (verbose)
-				fprintf(stderr, "ssrc 0x%x: stopped\n", src->ssrc);
+				logx("ssrc 0x%x: stopped", src->ssrc);
 			rtp_dropsrc(rtp, src);
 			break;
 		}
@@ -476,18 +502,18 @@ rtp_init(struct rtp *rtp, const char *host, const char *serv, int listen)
 
 	fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (fd == -1) {
-		fprintf(stderr, "socket: %s\n", strerror(errno));
+		logx("socket: %s", strerror(errno));
 		exit(1);
 	}
 
 	if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1) {
-		fprintf(stderr, "fcntl: O_NONBLOCK: %s\n", strerror(errno));
+		logx("fcntl: O_NONBLOCK: %s", strerror(errno));
 		exit(1);
 	}
 
 	tos = IPTOS_LOWDELAY;
 	if (setsockopt(fd, IPPROTO_IP, IP_TOS, &tos, sizeof(tos)) == -1) {
-		fprintf(stderr, "setsockopt: IP_TOS: %s\n", strerror(errno));
+		logx("setsockopt: IP_TOS: %s", strerror(errno));
 		exit(1);
 	}
 
@@ -498,18 +524,18 @@ rtp_init(struct rtp *rtp, const char *host, const char *serv, int listen)
 		aihints.ai_protocol = IPPROTO_UDP;
 		error = getaddrinfo(host, serv, &aihints, &ailist);
 		if (error) {
-			fprintf(stderr, "getaddrinfo: %s: %s\n", host, gai_strerror(error));
+			logx("getaddrinfo: %s: %s", host, gai_strerror(error));
 			exit(1);
 		}
 
 		ai = ailist;
 		if (ai == NULL) {
-			fprintf(stderr, "getaddrinfo: %s: no IP address\n", host);
+			logx("getaddrinfo: %s: no IP address", host);
 			exit(1);
 		}
 
 		if (bind(fd, ai->ai_addr, ai->ai_addrlen) == -1) {
-			fprintf(stderr, "bind: %s\n", strerror(errno));
+			logx("bind: %s", strerror(errno));
 			exit(1);
 		}
 		freeaddrinfo(ai);
@@ -545,7 +571,7 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, int listen)
 
 	hdl = sio_open(dev, mode, 1);
 	if (hdl == NULL) {
-		fprintf(stderr, "%s: failed to open audio device\n", dev);
+		logx("%s: failed to open audio device", dev);
 		return;
 	}
 
@@ -564,22 +590,22 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, int listen)
 	par.rchan = rtp_nch;
 
 	if (!sio_setpar(hdl, &par) || !sio_getpar(hdl, &par)) {
-		fprintf(stderr, "%s: failed to set parameters\n", dev);
+		logx("%s: failed to set parameters", dev);
 		goto err_close;
 	}
 
 	if (par.bits != 32 || par.le != SIO_LE_NATIVE || par.rate != rate) {
-		fprintf(stderr, "%s: unsupported audio parameters\n", dev);
+		logx("%s: unsupported audio parameters", dev);
 		goto err_close;
 	}
 
 	if ((mode & SIO_PLAY) && par.pchan < rtp_nch) {
-		fprintf(stderr, "%s: %d: unsupported playback chans\n", dev, par.pchan);
+		logx("%s: %d: unsupported playback chans", dev, par.pchan);
 		goto err_close;
 	}
 
 	if ((mode & SIO_REC) && par.rchan != rtp_nch) {
-		fprintf(stderr, "%s: %d: unsupported recording chans\n", dev, par.rchan);
+		logx("%s: %d: unsupported recording chans", dev, par.rchan);
 		goto err_close;
 	}
 
@@ -598,7 +624,7 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, int listen)
 		rec_size = sizeof(int) * par.rchan * par.round;
 		rec_buf = malloc(sizeof(int) * par.rchan * par.round);
 		if (rec_buf == NULL) {
-			fprintf(stderr, "%s: failed to allocate rec buffer\n", dev);
+			logx("%s: failed to allocate rec buffer", dev);
 			goto err_close;
 		}
 		rec_start = rec_end = 0;
@@ -606,7 +632,7 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, int listen)
 
 		data = malloc(rtp_bps * rtp_nch * par.round);
 		if (data == NULL) {
-			fprintf(stderr, "%s: failed to send pkt data\n", dev);
+			logx("%s: failed to send pkt data", dev);
 			goto err_close;
 		}
 	}
@@ -633,10 +659,10 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, int listen)
 		rtp->src_freelist = src;
 	}
 
-	fprintf(stderr, "device period: %d samples\n", par.round);
-	fprintf(stderr, "device buffer: %d samples\n", par.bufsz);
-	fprintf(stderr, "packet buffer: %d samples\n", rtp_bufsz);
-	fprintf(stderr, "mode:%s%s\n",
+	logx("device period: %d samples", par.round);
+	logx("device buffer: %d samples", par.bufsz);
+	logx("packet buffer: %d samples", rtp_bufsz);
+	logx("mode:%s%s",
 	  (mode & SIO_PLAY) ? " play" : "",
 	  (mode & SIO_REC) ? " rec" : "");
 
@@ -644,7 +670,7 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, int listen)
 		perror("src");
 
 	if (!sio_start(hdl)) {
-		fprintf(stderr, "%s: failed to start\n", dev);
+		logx("%s: failed to start", dev);
 		goto err_close;
 	}
 
@@ -667,13 +693,15 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, int listen)
 		}
 
 		if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1) {
-			fprintf(stderr, "clock_gettime: %s\n", strerror(errno));
+			logx("clock_gettime: %s", strerror(errno));
 			exit(1);
 		}
-		rtp_time = 1000000000LL * ts.tv_sec + ts.tv_nsec;
+		rtp_time = 1000000000LL * ts.tv_sec + ts.tv_nsec - rtp_time_base;
 
-		if (pfds[0].revents & POLLIN)
-			rtp_recvpkt(rtp);
+		if (pfds[0].revents & POLLIN) {
+			while (rtp_recvpkt(rtp))
+				;
+		}
 
 		events = sio_revents(hdl, &pfds[1]);
 		if (events & POLLHUP)
@@ -690,7 +718,7 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, int listen)
 		if (events & POLLIN) {
 			n = sio_read(hdl, rec_buf + rec_end, rec_size - rec_end);
 			if (sio_eof(hdl)) {
-				fprintf(stderr, "%s: device disconnected\n", dev);
+				logx("%s: device disconnected", dev);
 				goto err_close;
 			}
 			rec_end += n;
@@ -781,6 +809,7 @@ int
 main(int argc, char **argv)
 {
 	struct rtp rtp;
+	struct timespec ts;
 	unsigned int bits = 24, rate = 48000, bufsz = 2400;
 	char host[NI_MAXHOST], port[NI_MAXSERV];
 	int listen = 0, c;
@@ -828,6 +857,12 @@ main(int argc, char **argv)
 		fputs("usage: sndiortp [-b bits] [-l url] [-r rate] [url ...]\n", stderr);
 		exit(1);
 	}
+
+	if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1) {
+		logx("clock_gettime: %s", strerror(errno));
+		exit(1);
+	}
+	rtp_time_base = 1000000000LL * ts.tv_sec + ts.tv_nsec;
 
 	rtp_init(&rtp, host, port, listen);
 
