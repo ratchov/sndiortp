@@ -831,8 +831,9 @@ main(int argc, char **argv)
 	unsigned int bits = 24, rate = 48000, bufsz = 2400;
 	char host[NI_MAXHOST], port[NI_MAXSERV];
 	int listen = 0, c;
+	const char *dev = SIO_DEVANY;
 
-	while ((c = getopt(argc, argv, "b:l:r:v")) != -1) {
+	while ((c = getopt(argc, argv, "b:f:l:r:v")) != -1) {
 		switch (c) {
 		case 'b':
 			if (sscanf(optarg, "%u", &bits) != 1)
@@ -841,6 +842,9 @@ main(int argc, char **argv)
 				fputs("only 16 and 24 bits are supported\n", stderr);
 				exit(1);
 			}
+			break;
+		case 'f':
+			dev = optarg;
 			break;
 		case 'l':
 			listen = 1;
@@ -872,7 +876,7 @@ main(int argc, char **argv)
 
 	if (!listen && argc == 0) {
 	bad_usage:
-		fputs("usage: sndiortp [-b bits] [-l url] [-r rate] [url ...]\n", stderr);
+		fputs("usage: sndiortp [-b bits] [-f dev] [-l url] [-r rate] [url ...]\n", stderr);
 		exit(1);
 	}
 
@@ -904,7 +908,7 @@ main(int argc, char **argv)
 		argv++;
 	}
 
-	rtp_loop(&rtp, SIO_DEVANY, rate, listen);
+	rtp_loop(&rtp, dev, rate, listen);
 
 	return 0;
 }
