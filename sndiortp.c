@@ -2,6 +2,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -62,6 +63,7 @@ struct rtp {
 };
 
 int verbose;
+int quit;
 
 unsigned char *play_buf;
 size_t play_size, play_start, play_end;
@@ -100,6 +102,14 @@ void logx(const char *fmt, ...)
 	write(STDERR_FILENO, buf, p - buf);
 
 	errno = save_errno;
+}
+
+void
+sigint(int s)
+{
+	if (quit)
+		_exit(1);
+	quit = 1;
 }
 
 struct rtp_src *
@@ -675,6 +685,9 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, int listen)
 	}
 
 	while (1) {
+		if (quit)
+			break;
+
 		pfds[0].fd = rtp->fd;
 		pfds[0].events = POLLIN;
 		nfds = 1;
@@ -688,6 +701,8 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, int listen)
 
 		n = poll(pfds, nfds, -1);
 		if (n == -1) {
+			if (errno == EINTR)
+				continue;
 			perror("poll");
 			exit(1);
 		}
@@ -743,6 +758,8 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, int listen)
 			}
 		}
 	}
+
+	logx("terminating");
 
 err_close:
 	sio_close(hdl);
@@ -810,6 +827,7 @@ main(int argc, char **argv)
 {
 	struct rtp rtp;
 	struct timespec ts;
+	struct sigaction sa;
 	unsigned int bits = 24, rate = 48000, bufsz = 2400;
 	char host[NI_MAXHOST], port[NI_MAXSERV];
 	int listen = 0, c;
@@ -855,6 +873,14 @@ main(int argc, char **argv)
 	if (!listen && argc == 0) {
 	bad_usage:
 		fputs("usage: sndiortp [-b bits] [-l url] [-r rate] [url ...]\n", stderr);
+		exit(1);
+	}
+
+	sigfillset(&sa.sa_mask);
+	sa.sa_flags = SA_RESTART;
+	sa.sa_handler = sigint;
+	if (sigaction(SIGINT, &sa, NULL) == -1) {
+		perror("sigaction(int) failed");
 		exit(1);
 	}
 
