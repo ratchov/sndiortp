@@ -112,6 +112,19 @@ sigint(int s)
 	quit = 1;
 }
 
+long long
+rtp_gettime(void)
+{
+	struct timespec ts;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1) {
+		logx("clock_gettime: %s", strerror(errno));
+		exit(1);
+	}
+
+	return 1000000000LL * ts.tv_sec + ts.tv_nsec;
+}
+
 struct rtp_src *
 rtp_addsrc(struct rtp *rtp, unsigned int ssrc, unsigned int seq, unsigned int ts)
 {
@@ -562,7 +575,6 @@ void
 rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, int listen)
 {
 	struct rtp_src *src;
-	struct timespec ts;
 	unsigned char *data, *p;
 	struct pollfd *pfds;
 	struct sio_hdl *hdl;
@@ -707,11 +719,7 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, int listen)
 			exit(1);
 		}
 
-		if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1) {
-			logx("clock_gettime: %s", strerror(errno));
-			exit(1);
-		}
-		rtp_time = 1000000000LL * ts.tv_sec + ts.tv_nsec - rtp_time_base;
+		rtp_time = rtp_gettime() - rtp_time_base;
 
 		if (pfds[0].revents & POLLIN) {
 			while (rtp_recvpkt(rtp))
@@ -826,7 +834,6 @@ int
 main(int argc, char **argv)
 {
 	struct rtp rtp;
-	struct timespec ts;
 	struct sigaction sa;
 	unsigned int bits = 24, rate = 48000, bufsz = 2400;
 	char host[NI_MAXHOST], port[NI_MAXSERV];
@@ -888,11 +895,7 @@ main(int argc, char **argv)
 		exit(1);
 	}
 
-	if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1) {
-		logx("clock_gettime: %s", strerror(errno));
-		exit(1);
-	}
-	rtp_time_base = 1000000000LL * ts.tv_sec + ts.tv_nsec;
+	rtp_time_base = rtp_gettime();
 
 	rtp_init(&rtp, host, port, listen);
 
