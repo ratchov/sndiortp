@@ -8,7 +8,7 @@ clean:
 	rm -f -- sndiortp.o sndiortp
 
 sndiortp: sndiortp.o
-	$(CC) $(LDLAGS) -o sndiortp sndiortp.o $(LIBS)
+	$(CC) $(LDFLAGS) -o sndiortp sndiortp.o $(LIBS)
 
 sndiortp.o: $(SRCDIR)/sndiortp.c
 	$(CC) $(CFLAGS) -c $(SRCDIR)/sndiortp.c
