@@ -674,7 +674,7 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, int listen)
 		src->buf_len = 2 * rtp_bufsz;
 		src->buf = malloc(src->buf_len * rtp_nch * sizeof(int));
 		if (src->buf == NULL) {
-			perror("src");
+			perror("src->buf");
 			exit(1);
 		}
 		src->next = rtp->src_freelist;
@@ -689,7 +689,7 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, int listen)
 	  (mode & SIO_REC) ? " rec" : "");
 
 	if (mlockall(MCL_CURRENT | MCL_FUTURE) == -1)
-		perror("src");
+		perror("mlockall");
 
 	if (!sio_start(hdl)) {
 		logx("%s: failed to start", dev);
