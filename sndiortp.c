@@ -521,7 +521,7 @@ int
 rtp_init(struct rtp *rtp, const char *host, const char *serv, int listen)
 {
 	struct addrinfo *ailist, *ai, aihints;
-	int fd, tos, error;
+	int fd, opt, error;
 
 	fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (fd == -1) {
@@ -534,8 +534,8 @@ rtp_init(struct rtp *rtp, const char *host, const char *serv, int listen)
 		exit(1);
 	}
 
-	tos = IPTOS_LOWDELAY;
-	if (setsockopt(fd, IPPROTO_IP, IP_TOS, &tos, sizeof(tos)) == -1) {
+	opt = IPTOS_LOWDELAY;
+	if (setsockopt(fd, IPPROTO_IP, IP_TOS, &opt, sizeof(opt)) == -1) {
 		logx("setsockopt: IP_TOS: %s", strerror(errno));
 		exit(1);
 	}
