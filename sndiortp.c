@@ -552,7 +552,8 @@ rtp_init(struct rtp *rtp, const char *host, const char *serv, int listen,
     size_t bufsz)
 {
 	struct addrinfo *ailist, *ai, aihints;
-	int fd, opt, error;
+	struct rtp_src *src;
+	int i, fd, opt, error;
 
 	fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (fd == -1) {
@@ -604,7 +605,42 @@ rtp_init(struct rtp *rtp, const char *host, const char *serv, int listen,
 	rtp->nch = nch;
 	rtp->rate = rate;
 
+	for (i = 0; i < RTP_MAXSRC; i++) {
+		src = malloc(sizeof(struct rtp_src));
+		if (src == NULL) {
+			perror("src");
+			exit(1);
+		}
+		src->buf_len = 2 * rtp->bufsz;
+		src->buf = malloc(src->buf_len * rtp->nch * sizeof(int));
+		if (src->buf == NULL) {
+			perror("src->buf");
+			exit(1);
+		}
+		src->next = rtp->src_freelist;
+		rtp->src_freelist = src;
+	}
+
 	return 1;
+}
+
+void
+rtp_done(struct rtp *rtp)
+{
+	struct rtp_src *src;
+
+	while ((src = rtp->src_list) != NULL) {
+		rtp->src_list = src->next;
+		src->next = rtp->src_freelist;
+		rtp->src_freelist = src;
+	}
+	while ((src = rtp->src_freelist) != NULL) {
+		rtp->src_freelist = src->next;
+		free(src->buf);
+		free(src);
+	}
+
+	close(rtp->fd);
 }
 
 int
@@ -656,14 +692,12 @@ rtp_parseurl(const char *url, char *host, char *port)
 void
 mainloop(struct rtp *rtp, const char *dev, unsigned int blksz, int listen)
 {
-	struct rtp_src *src;
 	struct pollfd *pfds;
 	struct sio_hdl *hdl;
 	struct sio_par par;
 	size_t nfds;
 	int events, n;
 	unsigned int mode;
-	int i;
 
 	mode = 0;
 	if (listen)
@@ -731,22 +765,6 @@ mainloop(struct rtp *rtp, const char *dev, unsigned int blksz, int listen)
 		}
 		rec_start = rec_end = 0;
 		rec_nch = par.rchan;
-	}
-
-	for (i = 0; i < RTP_MAXSRC; i++) {
-		src = malloc(sizeof(struct rtp_src));
-		if (src == NULL) {
-			perror("src");
-			exit(1);
-		}
-		src->buf_len = 2 * rtp->bufsz;
-		src->buf = malloc(src->buf_len * rtp->nch * sizeof(int));
-		if (src->buf == NULL) {
-			perror("src->buf");
-			exit(1);
-		}
-		src->next = rtp->src_freelist;
-		rtp->src_freelist = src;
 	}
 
 	logx("device period: %d samples", par.round);
@@ -826,17 +844,6 @@ mainloop(struct rtp *rtp, const char *dev, unsigned int blksz, int listen)
 
 err_close:
 	sio_close(hdl);
-
-	while ((src = rtp->src_list) != NULL) {
-		rtp->src_list = src->next;
-		src->next = rtp->src_freelist;
-		rtp->src_freelist = src;
-	}
-	while ((src = rtp->src_freelist) != NULL) {
-		rtp->src_freelist = src->next;
-		free(src->buf);
-		free(src);
-	}
 }
 
 int
@@ -935,5 +942,6 @@ main(int argc, char **argv)
 
 	mainloop(&rtp, dev, blksz, listen);
 
+	rtp_done(&rtp);
 	return 0;
 }
