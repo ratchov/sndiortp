@@ -80,19 +80,20 @@ unsigned int rtp_nch;
 long long rtp_time, rtp_time_base;
 
 char usagestr[] = \
-    "usage: sndiortp [-hv] [-b nframes] [-c channels] [-f dev] [-l url]\n"
-    "                [-p bits] [-r rate] [-z nframes] [url ...]\n";
+    "usage: sndiortp [-hv] [-b nframes] [-c channels] [-f device]\n"
+    "                [-l rtp://addr[:port]] [-p bits] [-r rate] [-z nframes]\n"
+    "                [rtp://addr[:port] ...]\n";
 
 char helpstr[] =
-    "\t-b use the given receive buffer size\n"
-    "\t-c number of channels\n"
-    "\t-f use the given audio device\n"
-    "\t-l accept incoming stream on the given rtp://address[:port] url\n"
+    "\t-b receive buffer size\n"
+    "\t-c RTP number of channels\n"
+    "\t-f audio device name\n"
+    "\t-l accept RTP streams on the given local address\n"
     "\t-h print this help screen\n"
-    "\t-p use the given precision in bits\n"
-    "\t-r use the given sample rate\n"
+    "\t-p RTP audio samples precision in bits\n"
+    "\t-r RTP audio sample rate\n"
     "\t-v increase log verbosity\n"
-    "\t-z use the give audio block size\n";
+    "\t-z audio device block size\n";
 
 void logx(const char *fmt, ...)
 {
