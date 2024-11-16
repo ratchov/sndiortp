@@ -840,9 +840,9 @@ main(int argc, char **argv)
 	int listen = 0, c;
 	const char *dev = SIO_DEVANY;
 
-	while ((c = getopt(argc, argv, "b:f:l:r:v")) != -1) {
+	while ((c = getopt(argc, argv, "b:f:l:p:r:v")) != -1) {
 		switch (c) {
-		case 'b':
+		case 'p':
 			if (sscanf(optarg, "%u", &bits) != 1)
 				goto bad_usage;
 			if (bits != 16 && bits != 24) {
@@ -883,7 +883,7 @@ main(int argc, char **argv)
 
 	if (!listen && argc == 0) {
 	bad_usage:
-		fputs("usage: sndiortp [-b bits] [-f dev] [-l url] [-r rate] [url ...]\n", stderr);
+		fputs("usage: sndiortp [-f dev] [-l url] [-p bits] [-r rate] [url ...]\n", stderr);
 		exit(1);
 	}
 
