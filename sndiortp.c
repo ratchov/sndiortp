@@ -84,7 +84,7 @@ char usagestr[] = \
 
 char helpstr[] =
     "\t-f use the given audio device\n"
-    "\t-l accept incoming stream on the given rtp://address[:port] url"
+    "\t-l accept incoming stream on the given rtp://address[:port] url\n"
     "\t-h print this help screen\n"
     "\t-p use the given precision in bits\n"
     "\t-r use the given sample rate\n"
