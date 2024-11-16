@@ -79,6 +79,17 @@ unsigned int rtp_nch;
 
 long long rtp_time, rtp_time_base;
 
+char usagestr[] = \
+    "usage: sndiortp [-hv] [-f dev] [-l url] [-p bits] [-r rate] [url ...]\n";
+
+char helpstr[] =
+    "\t-f use the given audio device\n"
+    "\t-l accept incoming stream on the given rtp://address[:port] url"
+    "\t-h print this help screen\n"
+    "\t-p use the given precision in bits\n"
+    "\t-r use the given sample rate\n"
+    "\t-v increase log verbosity\n";
+
 void logx(const char *fmt, ...)
 {
 	char buf[128];
@@ -840,7 +851,7 @@ main(int argc, char **argv)
 	int listen = 0, c;
 	const char *dev = SIO_DEVANY;
 
-	while ((c = getopt(argc, argv, "b:f:l:p:r:v")) != -1) {
+	while ((c = getopt(argc, argv, "b:f:hl:p:r:v")) != -1) {
 		switch (c) {
 		case 'p':
 			if (sscanf(optarg, "%u", &bits) != 1)
@@ -852,6 +863,11 @@ main(int argc, char **argv)
 			break;
 		case 'f':
 			dev = optarg;
+			break;
+		case 'h':
+			fputs(usagestr, stderr);
+			fputs(helpstr, stderr);
+			exit(0);
 			break;
 		case 'l':
 			listen = 1;
@@ -883,7 +899,7 @@ main(int argc, char **argv)
 
 	if (!listen && argc == 0) {
 	bad_usage:
-		fputs("usage: sndiortp [-v] [-f dev] [-l url] [-p bits] [-r rate] [url ...]\n", stderr);
+		fputs(usagestr, stderr);
 		exit(1);
 	}
 
