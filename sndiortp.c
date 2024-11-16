@@ -80,11 +80,12 @@ unsigned int rtp_nch;
 long long rtp_time, rtp_time_base;
 
 char usagestr[] = \
-    "usage: sndiortp [-hv] [-b nframes] [-f dev] [-l url] [-p bits] [-r rate]\n"
-    "                [-z nframes] [url ...]\n";
+    "usage: sndiortp [-hv] [-b nframes] [-c channels] [-f dev] [-l url]\n"
+    "                [-p bits] [-r rate] [-z nframes] [url ...]\n";
 
 char helpstr[] =
     "\t-b use the given receive buffer size\n"
+    "\t-c number of channels\n"
     "\t-f use the given audio device\n"
     "\t-l accept incoming stream on the given rtp://address[:port] url\n"
     "\t-h print this help screen\n"
@@ -850,16 +851,24 @@ main(int argc, char **argv)
 {
 	struct rtp rtp;
 	struct sigaction sa;
-	unsigned int bits = 24, rate = 48000, blksz = 48, bufsz = 2400;
+	unsigned int bits = 24, rate = 48000, blksz = 48, bufsz = 2400, nch = 2;
 	char host[NI_MAXHOST], port[NI_MAXSERV];
 	int listen = 0, c;
 	const char *dev = SIO_DEVANY;
 
-	while ((c = getopt(argc, argv, "b:f:hl:p:r:vz:")) != -1) {
+	while ((c = getopt(argc, argv, "b:c:f:hl:p:r:vz:")) != -1) {
 		switch (c) {
 		case 'b':
 			if (sscanf(optarg, "%u", &bufsz) != 1)
 				goto bad_usage;
+			break;
+		case 'c':
+			if (sscanf(optarg, "%u", &nch) != 1)
+				goto bad_usage;
+			if (nch < 1 || nch > 256) {
+				fputs("channels must be in the 1..256 range", stderr);
+				exit(1);
+			}
 			break;
 		case 'p':
 			if (sscanf(optarg, "%u", &bits) != 1)
@@ -925,7 +934,7 @@ main(int argc, char **argv)
 
 	rtp_bufsz = bufsz;
 	rtp_bps = bits / 8;
-	rtp_nch = 2;
+	rtp_nch = nch;
 
 	while (argc > 0) {
 		if (!rtp_parseurl(argv[0], host, port))
