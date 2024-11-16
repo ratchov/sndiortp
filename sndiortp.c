@@ -841,8 +841,12 @@ mainloop(struct rtp *rtp, const char *dev, unsigned int blksz, int listen)
 	}
 
 	logx("terminating");
+	munlockall();
 
 err_close:
+	free(rec_buf);
+	free(play_buf);
+	free(pfds);
 	sio_close(hdl);
 }
 
