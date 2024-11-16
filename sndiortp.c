@@ -594,7 +594,6 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, unsigned int blksz
 	struct pollfd *pfds;
 	struct sio_hdl *hdl;
 	struct sio_par par;
-	long long t, dt;
 	size_t nfds;
 	int events, n;
 	unsigned int mode;
