@@ -883,7 +883,7 @@ main(int argc, char **argv)
 
 	if (!listen && argc == 0) {
 	bad_usage:
-		fputs("usage: sndiortp [-f dev] [-l url] [-p bits] [-r rate] [url ...]\n", stderr);
+		fputs("usage: sndiortp [-v] [-f dev] [-l url] [-p bits] [-r rate] [url ...]\n", stderr);
 		exit(1);
 	}
 
