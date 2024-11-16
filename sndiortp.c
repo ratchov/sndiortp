@@ -607,8 +607,54 @@ rtp_init(struct rtp *rtp, const char *host, const char *serv, int listen,
 	return 1;
 }
 
+int
+rtp_parseurl(const char *url, char *host, char *port)
+{
+	const char scheme[] = "rtp://";
+	const char *sep;
+	size_t len;
+
+	if (strncasecmp(url, scheme, sizeof(scheme) - 1) != 0) {
+		fprintf(stderr,  "%s: rtp://host[:port] scheme expected\n", url);
+		return 0;
+	}
+	url += sizeof(scheme) - 1;
+
+	sep = strchr(url,  '/');
+	if (sep != NULL) {
+		fprintf(stderr,  "%s: '/' not allowed\n", url);
+		return 0;
+	}
+
+	sep = strrchr(url,  ':');
+	if (sep == NULL) {
+		strlcpy(port, RTP_DEFAULT_PORT, NI_MAXSERV);
+		len = strlen(url);
+	} else {
+		strlcpy(port, sep + 1, NI_MAXSERV);
+		len = sep - url;
+	}
+
+	if (url[0] == '[') {
+		if (url[len - 1] != ']') {
+			fprintf(stderr,  "%s: ']' expected\n", url);
+			return 0;
+		}
+		url++;
+		len -= 2;
+	}
+	if (len >= NI_MAXHOST) {
+		fprintf(stderr,  "%s: hostname too long\n", url);
+		return 0;
+	}
+	memcpy(host, url, len);
+	host[len] = 0;
+
+	return 1;
+}
+
 void
-rtp_loop(struct rtp *rtp, const char *dev, unsigned int blksz, int listen)
+mainloop(struct rtp *rtp, const char *dev, unsigned int blksz, int listen)
 {
 	struct rtp_src *src;
 	struct pollfd *pfds;
@@ -794,52 +840,6 @@ err_close:
 }
 
 int
-rtp_parseurl(const char *url, char *host, char *port)
-{
-	const char scheme[] = "rtp://";
-	const char *sep;
-	size_t len;
-
-	if (strncasecmp(url, scheme, sizeof(scheme) - 1) != 0) {
-		fprintf(stderr,  "%s: rtp://host[:port] scheme expected\n", url);
-		return 0;
-	}
-	url += sizeof(scheme) - 1;
-
-	sep = strchr(url,  '/');
-	if (sep != NULL) {
-		fprintf(stderr,  "%s: '/' not allowed\n", url);
-		return 0;
-	}
-
-	sep = strrchr(url,  ':');
-	if (sep == NULL) {
-		strlcpy(port, RTP_DEFAULT_PORT, NI_MAXSERV);
-		len = strlen(url);
-	} else {
-		strlcpy(port, sep + 1, NI_MAXSERV);
-		len = sep - url;
-	}
-
-	if (url[0] == '[') {
-		if (url[len - 1] != ']') {
-			fprintf(stderr,  "%s: ']' expected\n", url);
-			return 0;
-		}
-		url++;
-		len -= 2;
-	}
-	if (len >= NI_MAXHOST) {
-		fprintf(stderr,  "%s: hostname too long\n", url);
-		return 0;
-	}
-	memcpy(host, url, len);
-	host[len] = 0;
-
-	return 1;
-}
-
-int
 main(int argc, char **argv)
 {
 	struct rtp rtp;
@@ -933,7 +933,7 @@ main(int argc, char **argv)
 		argv++;
 	}
 
-	rtp_loop(&rtp, dev, blksz, listen);
+	mainloop(&rtp, dev, blksz, listen);
 
 	return 0;
 }
