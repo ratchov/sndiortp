@@ -60,6 +60,7 @@ struct rtp {
 	} *dst_list;
 
 	int rate;
+	size_t bps, nch, bufsz;
 };
 
 int verbose;
@@ -72,10 +73,6 @@ unsigned int play_nch;
 int *rec_buf;
 size_t rec_size, rec_start, rec_end;
 unsigned int rec_nch;
-
-unsigned int rtp_bufsz;
-unsigned int rtp_bps;
-unsigned int rtp_nch;
 
 long long rtp_time, rtp_time_base;
 
@@ -158,8 +155,8 @@ rtp_addsrc(struct rtp *rtp, unsigned int ssrc, unsigned int seq, unsigned int ts
 	src->ts = ts;
 	src->started = 0;
 	src->buf_start = src->buf_used = 0;
-	src->nch = rtp_nch;
-	src->bps = rtp_bps;
+	src->nch = rtp->nch;
+	src->bps = rtp->bps;
 	src->next = rtp->src_list;
 	rtp->src_list = src;
 	if (verbose >= 2)
@@ -396,7 +393,7 @@ rtp_sendpkt(struct rtp *rtp, void *data, unsigned int count)
 
 	for (dst = rtp->dst_list; dst != NULL; dst = dst->next) {
 
-		size = count * rtp_bps * rtp_nch;
+		size = count * rtp->bps * rtp->nch;
 
 		hdr.flags = htons(2 << RTP_VERSION | 96 << RTP_PAYLOAD);
 		hdr.seq = htons(dst->seq);
@@ -451,7 +448,7 @@ rtp_sendblk(struct rtp *rtp, int *data, unsigned int nsamp)
 	unsigned int bpf;
 	int i, c, s;
 
-	bpf = rtp_bps * rtp_nch;
+	bpf = rtp->bps * rtp->nch;
 	maxsamp = RTP_MAXDATA / bpf;
 	npkt = (nsamp + maxsamp - 1) / maxsamp;
 
@@ -466,11 +463,11 @@ rtp_sendblk(struct rtp *rtp, int *data, unsigned int nsamp)
 		p = pktdata;
 		q = data;
 		for (i = 0; i < pktsz; i++) {
-			for (c = 0; c < rtp_nch; c++) {
+			for (c = 0; c < rtp->nch; c++) {
 				s = *q++;
 				*p++ = s >> 24;
 				*p++ = s >> 16;
-				if (rtp_bps == 3)
+				if (rtp->bps == 3)
 					*p++ = s >> 8;
 			}
 		}
@@ -489,7 +486,7 @@ rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, void *mixbuf, size_t todo)
 	int *p, *q;
 
 	if (!src->started) {
-		if (src->buf_used < rtp_bufsz)
+		if (src->buf_used < rtp->bufsz)
 			return;
 		if (verbose)
 			logx("ssrc 0x%x: started", src->ssrc);
@@ -550,7 +547,9 @@ rtp_mixbuf(struct rtp *rtp, void *mixbuf, size_t count)
 }
 
 int
-rtp_init(struct rtp *rtp, const char *host, const char *serv, int listen)
+rtp_init(struct rtp *rtp, const char *host, const char *serv, int listen,
+    unsigned int bits, unsigned int nch, unsigned int rate,
+    size_t bufsz)
 {
 	struct addrinfo *ailist, *ai, aihints;
 	int fd, opt, error;
@@ -600,11 +599,16 @@ rtp_init(struct rtp *rtp, const char *host, const char *serv, int listen)
 	rtp->src_list = rtp->src_freelist = NULL;
 	rtp->dst_list = NULL;
 
+	rtp->bufsz = bufsz;
+	rtp->bps = bits / 8;
+	rtp->nch = nch;
+	rtp->rate = rate;
+
 	return 1;
 }
 
 void
-rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, unsigned int blksz, int listen)
+rtp_loop(struct rtp *rtp, const char *dev, unsigned int blksz, int listen)
 {
 	struct rtp_src *src;
 	struct pollfd *pfds;
@@ -637,26 +641,26 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, unsigned int blksz
 	par.round = blksz;
 	par.appbufsz = 3 * par.round;
 	par.bits = 32;
-	par.rate = rate;
-	par.pchan = rtp_nch;
-	par.rchan = rtp_nch;
+	par.rate = rtp->rate;
+	par.pchan = rtp->nch;
+	par.rchan = rtp->nch;
 
 	if (!sio_setpar(hdl, &par) || !sio_getpar(hdl, &par)) {
 		logx("%s: failed to set parameters", dev);
 		goto err_close;
 	}
 
-	if (par.bits != 32 || par.le != SIO_LE_NATIVE || par.rate != rate) {
+	if (par.bits != 32 || par.le != SIO_LE_NATIVE || par.rate != rtp->rate) {
 		logx("%s: unsupported audio parameters", dev);
 		goto err_close;
 	}
 
-	if ((mode & SIO_PLAY) && par.pchan < rtp_nch) {
+	if ((mode & SIO_PLAY) && par.pchan < rtp->nch) {
 		logx("%s: %d: unsupported playback chans", dev, par.pchan);
 		goto err_close;
 	}
 
-	if ((mode & SIO_REC) && par.rchan != rtp_nch) {
+	if ((mode & SIO_REC) && par.rchan != rtp->nch) {
 		logx("%s: %d: unsupported recording chans", dev, par.rchan);
 		goto err_close;
 	}
@@ -683,20 +687,14 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, unsigned int blksz
 		rec_nch = par.rchan;
 	}
 
-	if (rtp_bufsz < par.rate / 20)
-		rtp_bufsz = par.rate / 20;
-	if (rtp_bufsz < par.bufsz + par.round * 4)
-		rtp_bufsz = par.bufsz + par.round * 4;
-	rtp->rate = par.rate;
-
 	for (i = 0; i < RTP_MAXSRC; i++) {
 		src = malloc(sizeof(struct rtp_src));
 		if (src == NULL) {
 			perror("src");
 			exit(1);
 		}
-		src->buf_len = 2 * rtp_bufsz;
-		src->buf = malloc(src->buf_len * rtp_nch * sizeof(int));
+		src->buf_len = 2 * rtp->bufsz;
+		src->buf = malloc(src->buf_len * rtp->nch * sizeof(int));
 		if (src->buf == NULL) {
 			perror("src->buf");
 			exit(1);
@@ -706,8 +704,8 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, unsigned int blksz
 	}
 
 	logx("device period: %d samples", par.round);
-	logx("device buffer: %d samples", par.bufsz);
-	logx("packet buffer: %d samples", rtp_bufsz);
+	logx("device buffer: %d samples", par.appbufsz);
+	logx("packet buffer: %d samples", rtp->bufsz);
 	logx("mode:%s%s",
 	  (mode & SIO_PLAY) ? " play" : "",
 	  (mode & SIO_REC) ? " rec" : "");
@@ -925,11 +923,7 @@ main(int argc, char **argv)
 
 	rtp_time_base = rtp_gettime();
 
-	rtp_init(&rtp, host, port, listen);
-
-	rtp_bufsz = bufsz;
-	rtp_bps = bits / 8;
-	rtp_nch = nch;
+	rtp_init(&rtp, host, port, listen, bits, nch, rate, bufsz);
 
 	while (argc > 0) {
 		if (!rtp_parseurl(argv[0], host, port))
@@ -939,7 +933,7 @@ main(int argc, char **argv)
 		argv++;
 	}
 
-	rtp_loop(&rtp, dev, rate, blksz, listen);
+	rtp_loop(&rtp, dev, blksz, listen);
 
 	return 0;
 }
