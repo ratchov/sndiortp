@@ -80,15 +80,18 @@ unsigned int rtp_nch;
 long long rtp_time, rtp_time_base;
 
 char usagestr[] = \
-    "usage: sndiortp [-hv] [-f dev] [-l url] [-p bits] [-r rate] [url ...]\n";
+    "usage: sndiortp [-hv] [-b nframes] [-f dev] [-l url] [-p bits] [-r rate]\n"
+    "                [-z nframes] [url ...]\n";
 
 char helpstr[] =
+    "\t-b use the given receive buffer size\n"
     "\t-f use the given audio device\n"
     "\t-l accept incoming stream on the given rtp://address[:port] url\n"
     "\t-h print this help screen\n"
     "\t-p use the given precision in bits\n"
     "\t-r use the given sample rate\n"
-    "\t-v increase log verbosity\n";
+    "\t-v increase log verbosity\n"
+    "\t-z use the give audio block size\n";
 
 void logx(const char *fmt, ...)
 {
@@ -583,13 +586,14 @@ rtp_init(struct rtp *rtp, const char *host, const char *serv, int listen)
 }
 
 void
-rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, int listen)
+rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, unsigned int blksz, int listen)
 {
 	struct rtp_src *src;
 	unsigned char *data, *p;
 	struct pollfd *pfds;
 	struct sio_hdl *hdl;
 	struct sio_par par;
+	long long t, dt;
 	size_t nfds;
 	int events, n;
 	unsigned int mode;
@@ -615,7 +619,7 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, int listen)
 	}
 
 	sio_initpar(&par);
-	par.round = rate / 1000;
+	par.round = blksz;
 	par.appbufsz = 3 * par.round;
 	par.bits = 32;
 	par.rate = rate;
@@ -846,13 +850,17 @@ main(int argc, char **argv)
 {
 	struct rtp rtp;
 	struct sigaction sa;
-	unsigned int bits = 24, rate = 48000, bufsz = 2400;
+	unsigned int bits = 24, rate = 48000, blksz = 48, bufsz = 2400;
 	char host[NI_MAXHOST], port[NI_MAXSERV];
 	int listen = 0, c;
 	const char *dev = SIO_DEVANY;
 
-	while ((c = getopt(argc, argv, "b:f:hl:p:r:v")) != -1) {
+	while ((c = getopt(argc, argv, "b:f:hl:p:r:vz:")) != -1) {
 		switch (c) {
+		case 'b':
+			if (sscanf(optarg, "%u", &bufsz) != 1)
+				goto bad_usage;
+			break;
 		case 'p':
 			if (sscanf(optarg, "%u", &bits) != 1)
 				goto bad_usage;
@@ -886,7 +894,7 @@ main(int argc, char **argv)
 			verbose++;
 			break;
 		case 'z':
-			if (sscanf(optarg, "%u", &bufsz) != 1)
+			if (sscanf(optarg, "%u", &blksz) != 1)
 				goto bad_usage;
 			break;
 		default:
@@ -927,7 +935,7 @@ main(int argc, char **argv)
 		argv++;
 	}
 
-	rtp_loop(&rtp, dev, rate, listen);
+	rtp_loop(&rtp, dev, rate, blksz, listen);
 
 	return 0;
 }
