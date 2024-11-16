@@ -441,26 +441,42 @@ rtp_sendpkt(struct rtp *rtp, void *data, unsigned int count)
 }
 
 void
-rtp_sendblk(struct rtp *rtp, unsigned char *data, unsigned int blksz)
+rtp_sendblk(struct rtp *rtp, int *data, unsigned int nsamp)
 {
-	unsigned int npkt, pktsz, nsamp, maxsamp;
+	unsigned char pktdata[RTP_MAXDATA];
+	unsigned char *p;
+	int *q;
+	unsigned int npkt, pktsz, maxsamp;
 	unsigned int bpf;
+	int i, c, s;
 
 	bpf = rtp_bps * rtp_nch;
 	maxsamp = RTP_MAXDATA / bpf;
-	npkt = (blksz + maxsamp - 1) / maxsamp;
+	npkt = (nsamp + maxsamp - 1) / maxsamp;
 
 	if (verbose >= 2)
-		logx("sending %d bytes (%d pkts)", blksz * bpf, npkt);
+		logx("sending %d bytes (%d pkts)", nsamp * bpf, npkt);
 
-	pktsz = (blksz + npkt - 1) / npkt;
-	nsamp = blksz;
+	pktsz = (nsamp + npkt - 1) / npkt;
 	while (nsamp > 0) {
 		if (pktsz > nsamp)
 			pktsz = nsamp;
-		rtp_sendpkt(rtp, data, pktsz);
+
+		p = pktdata;
+		q = data;
+		for (i = 0; i < pktsz; i++) {
+			for (c = 0; c < rtp_nch; c++) {
+				s = *q++;
+				*p++ = s >> 24;
+				*p++ = s >> 16;
+				if (rtp_bps == 3)
+					*p++ = s >> 8;
+			}
+		}
+
+		rtp_sendpkt(rtp, pktdata, pktsz);
 		nsamp -= pktsz;
-		data += pktsz * bpf;
+		data += pktsz;
 	}
 }
 
@@ -590,15 +606,13 @@ void
 rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, unsigned int blksz, int listen)
 {
 	struct rtp_src *src;
-	unsigned char *data, *p;
 	struct pollfd *pfds;
 	struct sio_hdl *hdl;
 	struct sio_par par;
 	size_t nfds;
 	int events, n;
 	unsigned int mode;
-	int s, *q;
-	int i, c;
+	int i;
 
 	mode = 0;
 	if (listen)
@@ -666,12 +680,6 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, unsigned int blksz
 		}
 		rec_start = rec_end = 0;
 		rec_nch = par.rchan;
-
-		data = malloc(rtp_bps * rtp_nch * par.round);
-		if (data == NULL) {
-			logx("%s: failed to send pkt data", dev);
-			goto err_close;
-		}
 	}
 
 	if (rtp_bufsz < par.rate / 20)
@@ -762,22 +770,9 @@ rtp_loop(struct rtp *rtp, const char *dev, unsigned int rate, unsigned int blksz
 			rec_end += n;
 
 			if (rec_end == rec_size) {
+				rtp_sendblk(rtp, rec_buf, par.round);
 				rec_start = 0;
 				rec_end = 0;
-
-				p = data;
-				q = rec_buf;
-				for (i = 0; i < par.round; i++) {
-					for (c = 0; c < par.rchan; c++) {
-						s = *q++;
-						*p++ = s >> 24;
-						*p++ = s >> 16;
-						if (rtp_bps == 3)
-							*p++ = s >> 8;
-					}
-				}
-
-				rtp_sendblk(rtp, data, par.round);
 			}
 		}
 	}
