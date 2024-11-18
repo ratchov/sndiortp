@@ -111,16 +111,14 @@ void logx(const char *fmt, ...)
 {
 	char buf[128];
 	char *p = buf, *end = buf + sizeof(buf);
-	size_t size;
 	va_list ap;
 	int save_errno = errno;
 
-	size = p < end ? end - p : 0;
-	p += snprintf(p, size, "%010lld.%09llu: ", rtp_time / 1000000000, rtp_time % 1000000000);
+	p += snprintf(buf, sizeof(buf),
+	    "%010lld.%09llu: ", rtp_time / 1000000000, rtp_time % 1000000000);
 
 	va_start(ap, fmt);
-	size = p < end ? end - p : 0;
-	p += vsnprintf(p, size, fmt, ap);
+	p += vsnprintf(p, p < end ? end - p : 0, fmt, ap);
 	va_end(ap);
 
 	if (p >= end)
