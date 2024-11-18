@@ -91,12 +91,12 @@ unsigned int rec_nch;
 
 long long rtp_time, rtp_time_base;
 
-char usagestr[] = \
+const char usagestr[] = \
     "usage: sndiortp [-hv] [-b nframes] [-c channels] [-f device]\n"
     "                [-l rtp://addr[:port]] [-p bits] [-r rate] [-z nframes]\n"
     "                [rtp://addr[:port] ...]\n";
 
-char helpstr[] =
+const char helpstr[] =
     "\t-b receive buffer size\n"
     "\t-c RTP number of channels\n"
     "\t-f audio device name\n"
