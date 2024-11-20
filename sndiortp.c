@@ -457,24 +457,25 @@ rtp_sendblk(struct rtp *rtp, int *data, unsigned int nsamp)
 	unsigned char pktdata[RTP_MAXDATA];
 	unsigned char *p;
 	int *q;
-	unsigned int npkt, pktsz, maxsamp;
+	unsigned int npkt, pktsz, maxsamp, maxpktsz;
 	unsigned int bpf;
 	int i, c, s;
 
 	bpf = rtp->bps * rtp->nch;
 	maxsamp = RTP_MAXDATA / bpf;
 	npkt = (nsamp + maxsamp - 1) / maxsamp;
+	maxpktsz = (nsamp + npkt - 1) / npkt;
 
 	if (verbose >= 2)
 		logx("sending %d bytes (%d pkts)", nsamp * bpf, npkt);
 
-	pktsz = (nsamp + npkt - 1) / npkt;
+	q = data;
 	while (nsamp > 0) {
+		pktsz = maxpktsz;
 		if (pktsz > nsamp)
 			pktsz = nsamp;
 
 		p = pktdata;
-		q = data;
 		for (i = 0; i < pktsz; i++) {
 			for (c = 0; c < rtp->nch; c++) {
 				s = *q++;
