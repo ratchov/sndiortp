@@ -63,7 +63,6 @@ struct rtp {
 	struct rtp_src {
 		struct rtp_src *next;
 		unsigned int seq, ts, ssrc;
-		unsigned int nch, bps;
 		int started;
 
 		/* ring buffer with received samples */
@@ -197,8 +196,6 @@ rtp_addsrc(struct rtp *rtp, unsigned int ssrc, unsigned int seq, unsigned int ts
 	src->ts = ts;
 	src->started = 0;
 	src->buf_start = src->buf_used = 0;
-	src->nch = rtp->nch;
-	src->bps = rtp->bps;
 	src->next = rtp->src_list;
 	rtp->src_list = src;
 	if (verbose >= 2)
@@ -380,7 +377,7 @@ rtp_recvpkt(struct rtp *rtp)
 		src = rtp_addsrc(rtp, ssrc, seq, ts);
 
 	data = u.buf + offs;
-	nsamp = (size - offs) / (src->bps * src->nch);
+	nsamp = (size - offs) / (rtp->bps * rtp->nch);
 
 	src->ts += nsamp;
 	src->seq = (src->seq + 1) & 0xffff;
@@ -403,14 +400,14 @@ rtp_recvpkt(struct rtp *rtp)
 			count = avail;
 		if (count > nsamp)
 			count = nsamp;
-		p = src->buf + end * src->nch;
+		p = src->buf + end * rtp->nch;
 
 		for (i = count; i > 0; i--) {
-			for (j = src->nch; j > 0; j--) {
+			for (j = rtp->nch; j > 0; j--) {
 				s = data[0] << 24 | data[1] << 16;
-				if (src->bps == 3)
+				if (rtp->bps == 3)
 					s |= data[2] << 8;
-				data += src->bps;
+				data += rtp->bps;
 				(*p++) = s;
 			}
 		}
@@ -605,8 +602,8 @@ rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, int *mixbuf, size_t todo)
 				break;
 			}
 
-			q = src->buf + src->buf_start * src->nch;
-			for (j = 0; j < src->nch; j++) {
+			q = src->buf + src->buf_start * rtp->nch;
+			for (j = 0; j < rtp->nch; j++) {
 				src->samphist[j] = q[j];
 			}
 
@@ -617,7 +614,7 @@ rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, int *mixbuf, size_t todo)
 
 			src->diff -= src->freq;
 		} else {
-			for (j = 0; j < src->nch; j++) {
+			for (j = 0; j < rtp->nch; j++) {
 				s = src->samphist[j] + mixbuf[j];
 				if (s > INT_MAX)
 					s = INT_MAX;
