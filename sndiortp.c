@@ -107,7 +107,9 @@ const char helpstr[] =
     "\t-v increase log verbosity\n"
     "\t-z audio device block size\n";
 
-void logx(const char *fmt, ...)
+__attribute__((__format__ (printf, 1, 2)))
+void
+logx(const char *fmt, ...)
 {
 	char buf[128];
 	char *p = buf, *end = buf + sizeof(buf);
@@ -783,7 +785,7 @@ mainloop(struct rtp *rtp, const char *dev, unsigned int blksz, int listen)
 
 	logx("device period: %d samples", par.round);
 	logx("device buffer: %d samples", par.appbufsz);
-	logx("packet buffer: %d samples", rtp->bufsz);
+	logx("packet buffer: %zd samples", rtp->bufsz);
 	logx("mode:%s%s",
 	  (mode & SIO_PLAY) ? " play" : "",
 	  (mode & SIO_REC) ? " rec" : "");
