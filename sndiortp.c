@@ -38,6 +38,9 @@
 #define RTP_MAXDATA		(RTP_MTU - 20)
 #define RTP_DEFAULT_PORT	"5004"
 #define RTP_MAXSRC		64
+#define RTP_MAXCHAN		64
+
+#define RTP_MULT		0x1000000LL
 
 struct rtp_hdr {
 #define RTP_VERSION		14
@@ -63,8 +66,30 @@ struct rtp {
 		unsigned int nch, bps;
 		int started;
 
+		/* ring buffer with received samples */
 		int *buf;
 		size_t buf_start, buf_used, buf_len;
+
+		/* local time of the last sample received */
+		long long time;
+
+		/*
+		 * Estimated offset (in samples) between the play pointer
+		 * and the last received sample. It's stored as a fixed-point
+		 * number (multiplied by RTP_MULT).
+		 */
+		long long offs;
+		long long offs_target;			/* inital value */
+		long long offs_sum, offs_cnt;		/* averaging */
+
+		/*
+		 * Resampler to adjust stream frequency in order
+		 * to reach the desired offset
+		 */
+		int diff;
+		int freq;
+		int samphist[RTP_MAXCHAN];
+
 	} *src_list, *src_freelist;
 
 	struct rtp_dst {
@@ -78,6 +103,7 @@ struct rtp {
 	size_t bps, nch, bufsz;
 };
 
+int resample = 1;
 int verbose;
 int quit;
 
@@ -91,8 +117,8 @@ unsigned int rec_nch;
 
 long long rtp_time, rtp_time_base;
 
-const char usagestr[] = \
-    "usage: sndiortp [-hv] [-b nframes] [-c channels] [-f device]\n"
+char usagestr[] = \
+    "usage: sndiortp [-hvx] [-b nframes] [-c channels] [-f device]\n"
     "                [-l rtp://addr[:port]] [-p bits] [-r rate] [-z nframes]\n"
     "                [rtp://addr[:port] ...]\n";
 
@@ -105,6 +131,7 @@ const char helpstr[] =
     "\t-p RTP audio samples precision in bits\n"
     "\t-r RTP audio sample rate\n"
     "\t-v increase log verbosity\n"
+    "\t-x don't adjust RTP source sample rate\n"
     "\t-z audio device block size\n";
 
 __attribute__((__format__ (printf, 1, 2)))
@@ -392,6 +419,7 @@ rtp_recvpkt(struct rtp *rtp)
 		src->buf_used += count;
 	}
 
+	src->time = rtp_time;
 	return 1;
 }
 
@@ -494,12 +522,23 @@ rtp_sendblk(struct rtp *rtp, int *data, unsigned int nsamp)
 	}
 }
 
-void
-rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, void *mixbuf, size_t todo)
+long long
+rtp_srcoffs(struct rtp *rtp, struct rtp_src *src)
 {
-	size_t count, i, j;
-	long long s;
-	int *p, *q;
+	/*
+	 * the estimated offset is the number of samples buffered plus
+	 * the time elapsed since we received the last sample
+	 */
+	return src->buf_used +
+	    ((rtp_time - src->time) * rtp->rate + 500000000LL) / 1000000000LL;
+}
+
+void
+rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, int *mixbuf, size_t todo)
+{
+	size_t j;
+	long long s, offs, avg, cnt;
+	int *q;
 
 	if (!src->started) {
 		if (src->buf_used < rtp->bufsz)
@@ -507,45 +546,90 @@ rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, void *mixbuf, size_t todo)
 		if (verbose)
 			logx("ssrc 0x%x: started", src->ssrc);
 		src->started = 1;
+		src->freq = RTP_MULT;
+		src->diff = RTP_MULT;
+		src->offs = RTP_MULT * rtp_srcoffs(rtp, src);
+		src->offs_target = src->offs;
+		src->offs_cnt = 0;
+		src->offs_sum = 0;
 	}
 
-	p = mixbuf;
+	src->offs_cnt += todo;
+	src->offs_sum += todo * rtp_srcoffs(rtp, src);
 
-	while (todo > 0) {
-		if (src->buf_used == 0) {
-			if (verbose)
-				logx("ssrc 0x%x: stopped", src->ssrc);
-			rtp_dropsrc(rtp, src);
-			break;
+	if (src->offs_cnt >= rtp->rate / 8) {
+
+		/*
+		 * estimate the time offset: calculate
+		 * the average offset over around 1 second (8 times
+		 * 1/8th of a second).
+		 */
+
+		/* save the old offset */
+		offs = src->offs;
+
+		/* average offset over the last 1/8th of second */
+		avg = RTP_MULT * (src->offs_sum + src->offs_cnt / 2) / src->offs_cnt;
+
+		/* low-pass the average offset, ~1 second decay time */
+		src->offs = (7 * src->offs + avg + 4) / 8;
+
+		/*
+		 * calculate resampling frequency that will
+		 * compensate the offset in roughly 128 seconds
+		 */
+		if (resample) {
+			cnt = RTP_MULT * src->offs_cnt;
+			src->freq = src->freq *
+			    (cnt - (src->offs - src->offs_target) / 128) /
+			    (cnt + (src->offs - offs));
 		}
 
-		count = src->buf_len - src->buf_start;
-		if (count > src->buf_used)
-			count = src->buf_used;
-		if (count > todo)
-			count = todo;
-		q = src->buf + src->buf_start * src->nch;
+		if (verbose) {
+			logx("err = %+.3f / %.3f, freq = %.17f",
+			    (double)(src->offs - src->offs_target) / RTP_MULT,
+			    (double)src->offs_target / RTP_MULT,
+			    (double)src->freq / RTP_MULT);
+		}
 
-		for (i = count; i > 0; i--) {
-			for (j = src->nch; j > 0; j--) {
-				s = *p + *q;
+		src->offs_cnt = 0;
+		src->offs_sum = 0;
+	}
+
+	while (todo > 0) {
+		if (src->diff >= src->freq) {
+			if (src->buf_used == 0) {
+				if (verbose)
+					logx("ssrc 0x%x: stopped", src->ssrc);
+				rtp_dropsrc(rtp, src);
+				break;
+			}
+
+			q = src->buf + src->buf_start * src->nch;
+			for (j = 0; j < src->nch; j++) {
+				src->samphist[j] = q[j];
+			}
+
+			src->buf_used--;
+			src->buf_start++;
+			if (src->buf_start >= src->buf_len)
+				src->buf_start -= src->buf_len;
+
+			src->diff -= src->freq;
+		} else {
+			for (j = 0; j < src->nch; j++) {
+				s = src->samphist[j] + mixbuf[j];
 				if (s > INT_MAX)
 					s = INT_MAX;
 				if (s < -INT_MAX)
 					s = -INT_MAX;
-				*p = s;
-				p++;
-				q++;
+				mixbuf[j] = s;
 			}
-			p += play_nch - src->nch;
+			mixbuf += play_nch;
+
+			src->diff += RTP_MULT;
+			todo--;
 		}
-
-		src->buf_used -= count;
-		src->buf_start += count;
-		if (src->buf_start >= src->buf_len)
-			src->buf_start -= src->buf_len;
-
-		todo -= count;
 	}
 }
 
@@ -876,7 +960,7 @@ main(int argc, char **argv)
 	int listen = 0, c;
 	const char *dev = SIO_DEVANY;
 
-	while ((c = getopt(argc, argv, "b:c:f:hl:p:r:vz:")) != -1) {
+	while ((c = getopt(argc, argv, "b:c:f:hl:p:r:vxz:")) != -1) {
 		switch (c) {
 		case 'b':
 			if (sscanf(optarg, "%u", &bufsz) != 1)
@@ -921,6 +1005,9 @@ main(int argc, char **argv)
 			break;
 		case 'v':
 			verbose++;
+			break;
+		case 'x':
+			resample = 0;
 			break;
 		case 'z':
 			if (sscanf(optarg, "%u", &blksz) != 1)
