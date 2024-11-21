@@ -143,6 +143,9 @@ const char helpstr[] =
     "\t-x don't adjust RTP source sample rate\n"
     "\t-z audio device block size\n";
 
+/*
+ * Log to stderr with with the current time as prefix
+ */
 void
 logx(const char *fmt, ...)
 {
@@ -167,6 +170,9 @@ logx(const char *fmt, ...)
 	errno = save_errno;
 }
 
+/*
+ * SIGINT handler
+ */
 void
 sigint(int s)
 {
@@ -175,6 +181,9 @@ sigint(int s)
 	quit = 1;
 }
 
+/*
+ * Return the current time in nanoseconds
+ */
 long long
 rtp_gettime(void)
 {
@@ -188,6 +197,10 @@ rtp_gettime(void)
 	return 1000000000LL * ts.tv_sec + ts.tv_nsec;
 }
 
+/*
+ * Find the rtp_sock structure of the given address family (IP or IPV6),
+ * if it doesn't exist, create it.
+ */
 struct rtp_sock *
 rtp_mksock(struct rtp *rtp, int family, int can_recv)
 {
@@ -237,6 +250,10 @@ rtp_mksock(struct rtp *rtp, int family, int can_recv)
 	return sock;
 }
 
+/*
+ * Create a rtp_sock structure and bind the socket to the given address
+ * and port
+ */
 void
 rtp_bind(struct rtp *rtp, const char *host, const char *serv)
 {
@@ -268,6 +285,9 @@ rtp_bind(struct rtp *rtp, const char *host, const char *serv)
 	freeaddrinfo(ailist);
 }
 
+/*
+ * Add the RTP source with the given SSRC, sequence number, and time-stamp.
+ */
 struct rtp_src *
 rtp_addsrc(struct rtp *rtp, unsigned int ssrc, unsigned int seq, unsigned int ts)
 {
@@ -292,6 +312,9 @@ rtp_addsrc(struct rtp *rtp, unsigned int ssrc, unsigned int seq, unsigned int ts
 	return src;
 }
 
+/*
+ * Drop the given RTP source.
+ */
 void
 rtp_dropsrc(struct rtp *rtp, struct rtp_src *src)
 {
@@ -315,6 +338,9 @@ rtp_dropsrc(struct rtp *rtp, struct rtp_src *src)
 	}
 }
 
+/*
+ * Find the RTP source with the given SSRC
+ */
 struct rtp_src *
 rtp_findsrc(struct rtp *rtp, unsigned int ssrc)
 {
@@ -327,6 +353,9 @@ rtp_findsrc(struct rtp *rtp, unsigned int ssrc)
 	return src;
 }
 
+/*
+ * Create a RTP destination for the given address and port
+ */
 int
 rtp_mkdst(struct rtp *rtp, const char *host, const char *serv)
 {
@@ -366,6 +395,13 @@ rtp_mkdst(struct rtp *rtp, const char *host, const char *serv)
 	return 1;
 }
 
+/*
+ * Retrieve the next packet from the given socket. Find the corresponding
+ * RTP source structure (create one if this is a new source) and copy the
+ * payload to its ring buffer.
+ *
+ * Retrun 0 if no packet could be retrieved (socket is blocking).
+ */
 int
 rtp_recvpkt(struct rtp *rtp, struct rtp_sock *sock)
 {
@@ -506,6 +542,9 @@ rtp_recvpkt(struct rtp *rtp, struct rtp_sock *sock)
 	return 1;
 }
 
+/*
+ * Send the given RTP payload to all RTP destinations.
+ */
 void
 rtp_sendpkt(struct rtp *rtp, void *data, unsigned int count)
 {
@@ -564,6 +603,10 @@ rtp_sendpkt(struct rtp *rtp, void *data, unsigned int count)
 		logx("sent %d samples", count);
 }
 
+/*
+ * Send the given block of audio samples to all RTP destinations,
+ * possibly splitting the block into multiple packets.
+ */
 void
 rtp_sendblk(struct rtp *rtp, int *data, unsigned int nsamp)
 {
@@ -605,17 +648,22 @@ rtp_sendblk(struct rtp *rtp, int *data, unsigned int nsamp)
 	}
 }
 
+/*
+ * Return the estimated offset, i.e. the number of samples buffered plus
+ * the time elapsed since we received the last sample
+ */
 long long
 rtp_srcoffs(struct rtp *rtp, struct rtp_src *src)
 {
-	/*
-	 * the estimated offset is the number of samples buffered plus
-	 * the time elapsed since we received the last sample
-	 */
 	return src->buf_used +
 	    ((rtp_time - src->time) * rtp->rate + 500000000LL) / 1000000000LL;
 }
 
+/*
+ * Produce (and mix) a block of audio samples from the given RTP source.
+ * The source is resampled to keep the offset between the audio device
+ * pointer and the RTP receive pointer constant.
+ */
 void
 rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, int *mixbuf, size_t todo)
 {
@@ -679,6 +727,9 @@ rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, int *mixbuf, size_t todo)
 		src->offs_sum = 0;
 	}
 
+	/*
+	 * Resample and add the data to 'mixbuf'.
+	 */
 	while (todo > 0) {
 		if (src->diff >= src->freq) {
 			if (src->buf_used == 0) {
@@ -716,6 +767,9 @@ rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, int *mixbuf, size_t todo)
 	}
 }
 
+/*
+ * Prodice a block of audio samples by mixing all RTP sources
+ */
 void
 rtp_mixbuf(struct rtp *rtp, void *mixbuf, size_t count)
 {
@@ -729,6 +783,10 @@ rtp_mixbuf(struct rtp *rtp, void *mixbuf, size_t count)
 	}
 }
 
+/*
+ * Initialize the rtp structure. Preallocate any structures that
+ * will be needed before we go real-time.
+ */
 int
 rtp_init(struct rtp *rtp, unsigned int bits, unsigned int nch, unsigned int rate, size_t bufsz)
 {
@@ -763,6 +821,9 @@ rtp_init(struct rtp *rtp, unsigned int bits, unsigned int nch, unsigned int rate
 	return 1;
 }
 
+/*
+ * Free resources
+ */
 void
 rtp_done(struct rtp *rtp)
 {
@@ -791,6 +852,9 @@ rtp_done(struct rtp *rtp)
 	}
 }
 
+/*
+ * Parse a rtp://host[:port] URL.
+ */
 int
 rtp_parseurl(const char *url, char *host, char *serv)
 {
@@ -858,6 +922,9 @@ mainloop(struct rtp *rtp, const char *dev, unsigned int blksz)
 	int events, n;
 	unsigned int mode;
 
+	/*
+	 * count the number of descriptor to poll for incoming packets
+	 */
 	nfds = 0;
 	for (sock = rtp->sock_list; sock != NULL; sock = sock->next) {
 		if (sock->can_recv)
