@@ -8,14 +8,14 @@ BINDIR = $(PREFIX)/bin
 all:	sndiortp
 
 clean:
-	rm -f -- sndiortp.o sndiortp
+	rm -f sndiortp.o sndiortp
 
 install:
 	mkdir -p $(DESTDIR)$(BINDIR)
 	cp sndiortp $(DESTDIR)$(BINDIR)
 
 uninstall:
-	rm -- $(DESTDIR)$(BINDIR)
+	rm -f $(DESTDIR)$(BINDIR)/sndiortp
 
 sndiortp: sndiortp.o
 	$(CC) $(LDFLAGS) -o sndiortp sndiortp.o $(LIBS)
