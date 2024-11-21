@@ -1,11 +1,11 @@
-# sndiortp 
+# sndiortp
 
 Play RTP streams or send recorded audio over RTP
 
 ## Description
 
-The sndiortp utility can record audio from a sndio(7) audio device and send it 
-on the network over RTP. Similarly it can receive audio streams over RTP and 
+The sndiortp utility can record audio from a sndio(7) audio device and send it
+on the network over RTP. Similarly it can receive audio streams over RTP and
 play the result on the device.
 
 Only 16-bit or 24-bit PCM payload is supported.
