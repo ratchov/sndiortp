@@ -59,7 +59,13 @@ struct rtp_hdr {
 };
 
 struct rtp {
-	int fd;
+	struct rtp_sock {
+		struct rtp_sock *next;
+		int fd;
+		int family;
+		int can_recv;
+	} *sock_list;
+
 	struct rtp_src {
 		struct rtp_src *next;
 		unsigned int seq, ts, ssrc;
@@ -96,6 +102,8 @@ struct rtp {
 		struct sockaddr_storage sa;
 		socklen_t salen;
 		unsigned int seq, ts, ssrc;
+
+		struct rtp_sock *sock;
 	} *dst_list;
 
 	int rate;
@@ -180,6 +188,86 @@ rtp_gettime(void)
 	return 1000000000LL * ts.tv_sec + ts.tv_nsec;
 }
 
+struct rtp_sock *
+rtp_mksock(struct rtp *rtp, int family, int can_recv)
+{
+	struct rtp_sock *sock;
+	int fd, opt;
+
+	for (sock = rtp->sock_list; sock != NULL; sock = sock->next) {
+		if (sock->family == family) {
+			if (can_recv)
+				sock->can_recv = 1;
+			return sock;
+		}
+	}
+
+	sock = malloc(sizeof(struct rtp_sock));
+	if (sock == NULL) {
+		perror("sock");
+		exit(1);
+	}
+
+	fd = socket(family, SOCK_DGRAM, IPPROTO_UDP);
+	if (fd == -1) {
+		logx("socket: %s", strerror(errno));
+		exit(1);
+	}
+
+	if (family == AF_INET6) {
+		/*
+		 * make sure IPv6 sockets are restricted to IPv6
+		 * addresses because we already use a IP socket
+		 * for IP addresses
+		 */
+		opt = 1;
+		if (setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY,
+			&opt, sizeof(int)) == -1) {
+			logx("fcntl: IPV6_V6ONLY: %s", strerror(errno));
+			exit(1);
+		}
+	}
+
+	sock->fd = fd;
+	sock->family = family;
+	sock->can_recv = can_recv;
+	sock->next = rtp->sock_list;
+	rtp->sock_list = sock;
+
+	return sock;
+}
+
+void
+rtp_bind(struct rtp *rtp, const char *host, const char *serv)
+{
+	struct addrinfo *ailist, *ai, aihints;
+	struct rtp_sock *sock;
+	int error;
+
+	memset(&aihints, 0, sizeof(struct addrinfo));
+	aihints.ai_family = AF_UNSPEC;
+	aihints.ai_socktype = SOCK_DGRAM;
+	aihints.ai_protocol = IPPROTO_UDP;
+
+	error = getaddrinfo(host[0] ? host : NULL, serv, &aihints, &ailist);
+	if (error) {
+		logx("getaddrinfo: %s: %s", host, gai_strerror(error));
+		exit(1);
+	}
+
+	for (ai = ailist; ai != NULL; ai = ai->ai_next) {
+
+		sock = rtp_mksock(rtp, ai->ai_family, 1);
+
+		if (bind(sock->fd, ai->ai_addr, ai->ai_addrlen) == -1) {
+			logx("bind: %s", strerror(errno));
+			exit(1);
+		}
+	}
+
+	freeaddrinfo(ailist);
+}
+
 struct rtp_src *
 rtp_addsrc(struct rtp *rtp, unsigned int ssrc, unsigned int seq, unsigned int ts)
 {
@@ -247,7 +335,7 @@ rtp_mkdst(struct rtp *rtp, const char *host, const char *serv)
 	int error;
 
 	memset(&aihints, 0, sizeof(struct addrinfo));
-	aihints.ai_family = AF_INET;
+	aihints.ai_family = AF_UNSPEC;
 	aihints.ai_socktype = SOCK_DGRAM;
 	aihints.ai_protocol = IPPROTO_UDP;
 	error = getaddrinfo(host, serv, &aihints, &ailist);
@@ -257,10 +345,6 @@ rtp_mkdst(struct rtp *rtp, const char *host, const char *serv)
 	}
 
 	ai = ailist;
-	if (ai == NULL) {
-		logx("getaddrinfo: %s: no IP address", host);
-		exit(1);
-	}
 
 	dst = malloc(sizeof(struct rtp_dst));
 	if (dst == NULL) {
@@ -273,6 +357,7 @@ rtp_mkdst(struct rtp *rtp, const char *host, const char *serv)
 	dst->seq = arc4random();
 	dst->ts = arc4random();
 	dst->ssrc = arc4random();
+	dst->sock = rtp_mksock(rtp, ai->ai_family, 0);
 
 	dst->next = rtp->dst_list;
 	rtp->dst_list = dst;
@@ -282,7 +367,7 @@ rtp_mkdst(struct rtp *rtp, const char *host, const char *serv)
 }
 
 int
-rtp_recvpkt(struct rtp *rtp)
+rtp_recvpkt(struct rtp *rtp, struct rtp_sock *sock)
 {
 	union {
 		struct rtp_hdr hdr;
@@ -309,7 +394,7 @@ rtp_recvpkt(struct rtp *rtp)
 	msg.msg_iov = iov;
 	msg.msg_iovlen = 1;
 
-	size = recvmsg(rtp->fd, &msg, MSG_DONTWAIT);
+	size = recvmsg(sock->fd, &msg, MSG_DONTWAIT);
 	if (size == -1) {
 		if (errno == EAGAIN)
 			return 0;
@@ -457,7 +542,7 @@ rtp_sendpkt(struct rtp *rtp, void *data, unsigned int count)
 		msg.msg_iov = iov;
 		msg.msg_iovlen = 2;
 
-		n = sendmsg(rtp->fd, &msg, MSG_DONTWAIT);
+		n = sendmsg(dst->sock->fd, &msg, MSG_DONTWAIT);
 		if (n == -1) {
 			if (errno != EAGAIN) {
 				logx("sendmsg: %s", strerror(errno));
@@ -645,56 +730,12 @@ rtp_mixbuf(struct rtp *rtp, void *mixbuf, size_t count)
 }
 
 int
-rtp_init(struct rtp *rtp, const char *host, const char *serv, int listen,
-    unsigned int bits, unsigned int nch, unsigned int rate,
-    size_t bufsz)
+rtp_init(struct rtp *rtp, unsigned int bits, unsigned int nch, unsigned int rate, size_t bufsz)
 {
-	struct addrinfo *ailist, *ai, aihints;
 	struct rtp_src *src;
-	int i, fd, opt, error;
+	int i;
 
-	fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-	if (fd == -1) {
-		logx("socket: %s", strerror(errno));
-		exit(1);
-	}
-
-	if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1) {
-		logx("fcntl: O_NONBLOCK: %s", strerror(errno));
-		exit(1);
-	}
-
-	opt = IPTOS_LOWDELAY;
-	if (setsockopt(fd, IPPROTO_IP, IP_TOS, &opt, sizeof(opt)) == -1) {
-		logx("setsockopt: IP_TOS: %s", strerror(errno));
-		exit(1);
-	}
-
-	if (listen) {
-		memset(&aihints, 0, sizeof(struct addrinfo));
-		aihints.ai_family = AF_INET;
-		aihints.ai_socktype = SOCK_DGRAM;
-		aihints.ai_protocol = IPPROTO_UDP;
-		error = getaddrinfo(host, serv, &aihints, &ailist);
-		if (error) {
-			logx("getaddrinfo: %s: %s", host, gai_strerror(error));
-			exit(1);
-		}
-
-		ai = ailist;
-		if (ai == NULL) {
-			logx("getaddrinfo: %s: no IP address", host);
-			exit(1);
-		}
-
-		if (bind(fd, ai->ai_addr, ai->ai_addrlen) == -1) {
-			logx("bind: %s", strerror(errno));
-			exit(1);
-		}
-		freeaddrinfo(ai);
-	}
-
-	rtp->fd = fd;
+	rtp->sock_list = NULL;
 	rtp->src_list = rtp->src_freelist = NULL;
 	rtp->dst_list = NULL;
 
@@ -725,6 +766,8 @@ rtp_init(struct rtp *rtp, const char *host, const char *serv, int listen,
 void
 rtp_done(struct rtp *rtp)
 {
+	struct rtp_sock *sock;
+	struct rtp_dst *dst;
 	struct rtp_src *src;
 
 	while ((src = rtp->src_list) != NULL) {
@@ -737,59 +780,77 @@ rtp_done(struct rtp *rtp)
 		free(src->buf);
 		free(src);
 	}
-
-	close(rtp->fd);
+	while ((dst = rtp->dst_list) != NULL) {
+		rtp->dst_list = dst->next;
+		free(dst);
+	}
+	while ((sock = rtp->sock_list) != NULL) {
+		rtp->sock_list = sock->next;
+		close(sock->fd);
+		free(sock);
+	}
 }
 
 int
-rtp_parseurl(const char *url, char *host, char *port)
+rtp_parseurl(const char *url, char *host, char *serv)
 {
 	const char scheme[] = "rtp://";
-	const char *sep;
+	const char *p = url, *tok, *end;
 	size_t len;
 
-	if (strncasecmp(url, scheme, sizeof(scheme) - 1) != 0) {
+	if (strncasecmp(p, scheme, sizeof(scheme) - 1) != 0) {
 		fprintf(stderr,  "%s: rtp://host[:port] scheme expected\n", url);
 		return 0;
 	}
-	url += sizeof(scheme) - 1;
+	p += sizeof(scheme) - 1;
 
-	sep = strchr(url,  '/');
-	if (sep != NULL) {
+	if (*p == '[') {
+		tok = p + 1;
+		end = strchr(tok, ']');
+		if (end == NULL) {
+			fprintf(stderr,  "%s: ending ']' expected\n", url);
+			return 0;
+		}
+		len = end - tok;
+		p += len + 2;
+	} else {
+		tok = p;
+		len = strcspn(p, ":/");
+		p += len;
+	}
+
+	if (len >= NI_MAXHOST) {
+		fprintf(stderr,  "%s: host component too long\n", url);
+		return 0;
+	}
+	memcpy(host, tok, len);
+	host[len] = 0;
+
+	if (*p == ':') {
+		tok = ++p;
+		len = strcspn(tok, "/");
+		if (len >= NI_MAXSERV) {
+			fprintf(stderr,  "%s: service component too long\n", url);
+			return 0;
+		}
+		memcpy(serv, tok, len);
+		serv[len] = 0;
+		p += len;
+	} else
+		strlcpy(serv, RTP_DEFAULT_PORT, NI_MAXSERV);
+
+	if (*p != 0) {
 		fprintf(stderr,  "%s: '/' not allowed\n", url);
 		return 0;
 	}
-
-	sep = strrchr(url,  ':');
-	if (sep == NULL) {
-		strlcpy(port, RTP_DEFAULT_PORT, NI_MAXSERV);
-		len = strlen(url);
-	} else {
-		strlcpy(port, sep + 1, NI_MAXSERV);
-		len = sep - url;
-	}
-
-	if (url[0] == '[') {
-		if (url[len - 1] != ']') {
-			fprintf(stderr,  "%s: ']' expected\n", url);
-			return 0;
-		}
-		url++;
-		len -= 2;
-	}
-	if (len >= NI_MAXHOST) {
-		fprintf(stderr,  "%s: hostname too long\n", url);
-		return 0;
-	}
-	memcpy(host, url, len);
-	host[len] = 0;
 
 	return 1;
 }
 
 void
-mainloop(struct rtp *rtp, const char *dev, unsigned int blksz, int listen)
+mainloop(struct rtp *rtp, const char *dev, unsigned int blksz)
 {
+	struct rtp_sock *sock;
 	struct pollfd *pfds;
 	struct sio_hdl *hdl;
 	struct sio_par par;
@@ -797,8 +858,15 @@ mainloop(struct rtp *rtp, const char *dev, unsigned int blksz, int listen)
 	int events, n;
 	unsigned int mode;
 
+	nfds = 0;
+	for (sock = rtp->sock_list; sock != NULL; sock = sock->next) {
+		if (sock->can_recv)
+			nfds++;
+	}
+
 	mode = 0;
-	if (listen)
+	mode = 0;
+	if (nfds > 0)
 		mode |= SIO_PLAY;
 	if (rtp->dst_list)
 		mode |= SIO_REC;
@@ -809,7 +877,7 @@ mainloop(struct rtp *rtp, const char *dev, unsigned int blksz, int listen)
 		return;
 	}
 
-	pfds = malloc((sio_nfds(hdl) + 1) * sizeof(struct pollfd));
+	pfds = malloc((sio_nfds(hdl) + nfds) * sizeof(struct pollfd));
 	if (pfds == NULL) {
 		perror("pfds");
 		exit(1);
@@ -884,16 +952,21 @@ mainloop(struct rtp *rtp, const char *dev, unsigned int blksz, int listen)
 		if (quit)
 			break;
 
-		pfds[0].fd = rtp->fd;
-		pfds[0].events = POLLIN;
-		nfds = 1;
+		nfds = 0;
+		for (sock = rtp->sock_list; sock != NULL; sock = sock->next) {
+			if (!sock->can_recv)
+				continue;
+			pfds[nfds].fd = sock->fd;
+			pfds[nfds].events = POLLIN;
+			nfds++;
+		}
 
 		events = 0;
 		if (mode & SIO_PLAY)
 			events |= POLLOUT;
 		if (mode & SIO_REC)
 			events |= POLLIN;
-		nfds += sio_pollfd(hdl, &pfds[1], events);
+		nfds += sio_pollfd(hdl, &pfds[nfds], events);
 
 		n = poll(pfds, nfds, -1);
 		if (n == -1) {
@@ -905,12 +978,18 @@ mainloop(struct rtp *rtp, const char *dev, unsigned int blksz, int listen)
 
 		rtp_time = rtp_gettime() - rtp_time_base;
 
-		if (pfds[0].revents & POLLIN) {
-			while (rtp_recvpkt(rtp))
-				;
+		nfds = 0;
+		for (sock = rtp->sock_list; sock != NULL; sock = sock->next) {
+			if (!sock->can_recv)
+				continue;
+			if (pfds[nfds].revents & POLLIN) {
+				while (rtp_recvpkt(rtp, sock))
+					;
+			}
+			nfds++;
 		}
 
-		events = sio_revents(hdl, &pfds[1]);
+		events = sio_revents(hdl, &pfds[nfds]);
 		if (events & POLLHUP)
 			break;
 		if (events & POLLOUT) {
@@ -1035,7 +1114,10 @@ main(int argc, char **argv)
 
 	rtp_time_base = rtp_gettime();
 
-	rtp_init(&rtp, host, port, listen, bits, nch, rate, bufsz);
+	rtp_init(&rtp, bits, nch, rate, bufsz);
+
+	if (listen)
+		rtp_bind(&rtp, host, port);
 
 	while (argc > 0) {
 		if (!rtp_parseurl(argv[0], host, port))
@@ -1045,7 +1127,7 @@ main(int argc, char **argv)
 		argv++;
 	}
 
-	mainloop(&rtp, dev, blksz, listen);
+	mainloop(&rtp, dev, blksz);
 
 	rtp_done(&rtp);
 	return 0;
