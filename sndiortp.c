@@ -1113,7 +1113,7 @@ main(int argc, char **argv)
 		case 'c':
 			if (sscanf(optarg, "%u", &nch) != 1)
 				goto bad_usage;
-			if (nch < 1 || nch > 256) {
+			if (nch < 1 || nch > RTP_MAXCHAN) {
 				fputs("channels must be in the 1..256 range", stderr);
 				exit(1);
 			}
