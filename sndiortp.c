@@ -932,7 +932,6 @@ mainloop(struct rtp *rtp, const char *dev, unsigned int blksz)
 	}
 
 	mode = 0;
-	mode = 0;
 	if (nfds > 0)
 		mode |= SIO_PLAY;
 	if (rtp->dst_list)
