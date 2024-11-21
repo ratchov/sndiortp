@@ -126,7 +126,7 @@ unsigned int rec_nch;
 
 long long rtp_time, rtp_time_base;
 
-char usagestr[] = \
+const char usagestr[] = \
     "usage: sndiortp [-hvx] [-b nframes] [-c channels] [-f device]\n"
     "                [-l rtp://addr[:port]] [-p bits] [-r rate] [-z nframes]\n"
     "                [rtp://addr[:port] ...]\n";
