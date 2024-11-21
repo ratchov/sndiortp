@@ -39,8 +39,7 @@
 #define RTP_DEFAULT_PORT	"5004"
 #define RTP_MAXSRC		64
 #define RTP_MAXCHAN		64
-
-#define RTP_MULT		0x1000000LL
+#define RTP_MULT		0x1000000
 
 struct rtp_hdr {
 #define RTP_VERSION		14
