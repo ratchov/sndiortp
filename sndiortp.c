@@ -34,8 +34,8 @@
 #include <netdb.h>
 #include <sndio.h>
 
-#define RTP_MTU			(1500 - 8 - 12)
-#define RTP_MAXDATA		(RTP_MTU - 20)
+#define RTP_MTU			1500
+#define RTP_MAXDATA		(RTP_MTU - 68)	/* IPv6 has 68-byte headers */
 #define RTP_DEFAULT_PORT	"5004"
 #define RTP_MAXSRC		64
 #define RTP_MAXCHAN		64
