@@ -102,6 +102,8 @@ struct rtp {
 	size_t bps, nch, bufsz;
 };
 
+void logx(const char *fmt, ...) __attribute__((__format__ (printf, 1, 2)));
+
 int resample = 1;
 int verbose;
 int quit;
@@ -133,7 +135,6 @@ const char helpstr[] =
     "\t-x don't adjust RTP source sample rate\n"
     "\t-z audio device block size\n";
 
-__attribute__((__format__ (printf, 1, 2)))
 void
 logx(const char *fmt, ...)
 {
