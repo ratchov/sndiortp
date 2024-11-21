@@ -143,8 +143,8 @@ logx(const char *fmt, ...)
 	va_list ap;
 	int save_errno = errno;
 
-	p += snprintf(buf, sizeof(buf),
-	    "%010lld.%09llu: ", rtp_time / 1000000000, rtp_time % 1000000000);
+	p += snprintf(buf, sizeof(buf), "%010lld.%09llu: ",
+	    rtp_time / 1000000000, rtp_time % 1000000000);
 
 	va_start(ap, fmt);
 	p += vsnprintf(p, p < end ? end - p : 0, fmt, ap);
