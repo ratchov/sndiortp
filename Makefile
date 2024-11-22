@@ -4,6 +4,7 @@ SRCDIR = .
 
 PREFIX = /usr/local
 BINDIR = $(PREFIX)/bin
+MAN1DIR = $(PREFIX)/man/man1
 
 all:	sndiortp
 
@@ -12,7 +13,9 @@ clean:
 
 install:
 	mkdir -p $(DESTDIR)$(BINDIR)
+	mkdir -p $(DESTDIR)$(MAN1DIR)
 	cp sndiortp $(DESTDIR)$(BINDIR)
+	cp sndiortp.1 $(DESTDIR)$(MAN1DIR)
 
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/sndiortp
