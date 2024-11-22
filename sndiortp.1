@@ -1,0 +1,118 @@
+.\"
+.\" Copyright (c) 2024 Alexandre Ratchov <alex@caoua.org>
+.\"
+.\" Permission to use, copy, modify, and distribute this software for any
+.\" purpose with or without fee is hereby granted, provided that the above
+.\" copyright notice and this permission notice appear in all copies.
+.\"
+.\" THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+.\" WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+.\" MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+.\" ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+.\" WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+.\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+.\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+.\"
+.Dd November 22, 2024
+.Dt SNDIORTP 1
+.Os
+.Sh NAME
+.Nm sndiortp
+.Nd play RTP streams or send recorded audio over RTP
+.Sh SYNOPSIS
+.Nm sndiortp
+.Op Fl hvx
+.Op Fl b Ar size
+.Op Fl c Ar channels
+.Op Fl f Ar device
+.Op Fl l Ar rtp://[address][:port]
+.Op Fl p Ar bits
+.Op Fl r Ar rate
+.Op Fl v Ar volume
+.Op Fl z Ar size
+.Op Ar [rtp://host[:port] ...]
+.Sh DESCRIPTION
+The
+.Nm
+utility records audio from the
+.Xr sndio 7
+audio device and sends it over the Real-time Transport Protocol (RTP)
+to the given network addresses.
+Similarly it may receive any number of audio streams
+.Pq Fl l
+over RTP and play the resulting mix on the local audio device.
+Only 16-bit and 24-bit PCM payloads are supported, making
+.Nm
+suitable for local network areas only.
+By default
+.Nm
+uses UDP port 5004.
+.Pp
+As the remote and local device clocks are not synchronized,
+the inbound RTP stream sample rate is slightly adjusted by resampling it.
+This ensures that the time between a sample is received and the time
+it is played stays constant.
+If an inbound network packet is lost, playback of the stream restarts:
+a reliable network with reserved bandwidth is thus recommended.
+.Pp
+The options are as follows:
+.Bl -tag -width Ds
+.It Fl b Ar size
+The RTP receive buffer size in frames.
+Default is 2400.
+.It Fl c Ar channels
+The RTP channels count.
+The default is 2, i.e. stereo.
+.It Fl f Ar device
+Use this
+.Xr sndio 7
+audio device.
+Default is
+.Pa default .
+.It Fl l Ar rtp://[address][:port]
+Accept RTP streams on the given local network address.
+If no address is provided, then
+.Nm
+will accept packets from any address.
+.It Fl p Ar bits
+The RTP bits per sample.
+Only 16 and 24 are supported.
+Default is 24.
+.It Fl r Ar rate
+Sample rate in Hertz of the RTP stream.
+The default is
+.Cm 48000 .
+.It Fl v
+Increase log verbosity.
+.It Fl x
+Do not adjust the RTP source sample rate to the local audio device sample rate.
+Unless the local and remote clocks are synchronized, the
+receive buffer will overrun or underrun, causing
+.Nm
+to reset periodically.
+.It Fl z Ar size
+The audio device block size in frames.
+Default is 48.
+.El
+.Pp
+If
+.Nm
+is sent
+.Dv SIGINT ,
+it drains the play buffer and exits.
+.Sh EXAMPLES
+Receive RTP streams on port 5120 and play the resulting mix:
+.Bd -literal -offset indent
+$ sndiortp -l rtp://:5120
+.Ed
+.Pp
+Send recorded data to 192.168.0.1 and 192.168.0.2 port 5120:
+.Bd -literal -offset indent
+$ sndiortp rtp://192.168.0.1:5120 rtp://192.168.0.1:5120
+.Ed
+.Sh SEE ALSO
+.Xr sndio 7
+.Sh BUGS
+Resampling is low quality.
+.Pp
+Playback is limited to 64 streams.
