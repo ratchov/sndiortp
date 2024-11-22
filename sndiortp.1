@@ -59,7 +59,7 @@ The options are as follows:
 .Bl -tag -width Ds
 .It Fl b Ar size
 The RTP receive buffer size in frames.
-Default is 2400.
+Default is 50ms, i.e. 2400 frames at the default sample rate.
 .It Fl c Ar channels
 The RTP channels count.
 The default is 2, i.e. stereo.
@@ -92,7 +92,7 @@ receive buffer will overrun or underrun, causing
 to reset periodically.
 .It Fl z Ar size
 The audio device block size in frames.
-Default is 48.
+Default is 10ms, i.e. 480 frames at the default sample rate.
 .El
 .Pp
 If

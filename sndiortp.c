@@ -950,7 +950,7 @@ mainloop(struct rtp *rtp, const char *dev, unsigned int blksz)
 
 	sio_initpar(&par);
 	par.round = blksz;
-	par.appbufsz = 3 * par.round;
+	par.appbufsz = 2 * par.round;
 	par.bits = 32;
 	par.rate = rtp->rate;
 	par.pchan = rtp->nch;
@@ -1097,7 +1097,7 @@ main(int argc, char **argv)
 {
 	struct rtp rtp;
 	struct sigaction sa;
-	unsigned int bits = 24, rate = 48000, blksz = 48, bufsz = 2400, nch = 2;
+	unsigned int bits = 24, rate = 48000, nch = 2, blksz = 0, bufsz = 0;
 	char host[NI_MAXHOST], port[NI_MAXSERV];
 	int listen = 0, c;
 	const char *dev = SIO_DEVANY;
@@ -1159,6 +1159,11 @@ main(int argc, char **argv)
 			goto bad_usage;
 		}
 	}
+
+	if (blksz == 0)
+		blksz = rate / 100;
+	if (bufsz == 0)
+		bufsz = rate / 20;
 
 	argc -= optind;
 	argv += optind;
