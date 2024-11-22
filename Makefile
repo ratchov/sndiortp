@@ -2,7 +2,7 @@ CFLAGS = -Wall -O2 -g
 LIBS = -lsndio
 SRCDIR = .
 
-PREFIX = /usr
+PREFIX = /usr/local
 BINDIR = $(PREFIX)/bin
 
 all:	sndiortp
