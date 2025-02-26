@@ -900,7 +900,7 @@ rtp_parseurl(const char *url, char *host, char *serv)
 		serv[len] = 0;
 		p += len;
 	} else
-		strlcpy(serv, RTP_DEFAULT_PORT, NI_MAXSERV);
+		snprintf(serv, NI_MAXSERV, "%s", RTP_DEFAULT_PORT);
 
 	if (*p != 0) {
 		fprintf(stderr,  "%s: '/' not allowed\n", url);
