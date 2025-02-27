@@ -306,7 +306,7 @@ rtp_addsrc(struct rtp *rtp, unsigned int ssrc, unsigned int seq, unsigned int ts
 	src->buf_start = src->buf_used = 0;
 	src->next = rtp->src_list;
 	rtp->src_list = src;
-	if (verbose >= 2)
+	if (verbose >= 3)
 		logx("ssrc 0x%x: created", src->ssrc);
 	return src;
 }
@@ -329,7 +329,7 @@ rtp_dropsrc(struct rtp *rtp, struct rtp_src *src)
 			*psrc = src->next;
 			src->next = rtp->src_freelist;
 			rtp->src_freelist = src;
-			if (verbose >= 2)
+			if (verbose >= 3)
 				logx("ssrc 0x%x: dropped", src->ssrc);
 			break;
 		}
@@ -598,7 +598,7 @@ rtp_sendpkt(struct rtp *rtp, void *data, unsigned int count)
 		if (verbose)
 			logx("dropped %d pkts", dropped);
 	}
-	if (verbose >= 2)
+	if (verbose >= 3)
 		logx("sent %d samples", count);
 }
 
@@ -621,7 +621,7 @@ rtp_sendblk(struct rtp *rtp, int *data, unsigned int nsamp)
 	npkt = (nsamp + maxsamp - 1) / maxsamp;
 	maxpktsz = (nsamp + npkt - 1) / npkt;
 
-	if (verbose >= 2)
+	if (verbose >= 3)
 		logx("sending %d bytes (%d pkts)", nsamp * bpf, npkt);
 
 	q = data;
@@ -716,7 +716,7 @@ rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, int *mixbuf, size_t todo)
 			    (cnt + (src->offs - offs));
 		}
 
-		if (verbose) {
+		if (verbose >= 2) {
 			logx("err = %+.3f / %.3f, freq = %.17f",
 			    (double)(src->offs - src->offs_target) / RTP_MULT,
 			    (double)src->offs_target / RTP_MULT,
