@@ -639,6 +639,7 @@ rtp_sendblk(struct rtp *rtp, int *data, unsigned int nsamp)
 				if (rtp->bps == 3)
 					*p++ = s >> 8;
 			}
+			q += rec_nch - rtp->nch;
 		}
 
 		rtp_sendpkt(rtp, pktdata, pktsz);
@@ -971,7 +972,7 @@ mainloop(struct rtp *rtp, const char *dev, unsigned int blksz)
 		goto err_close;
 	}
 
-	if ((mode & SIO_REC) && par.rchan != rtp->nch) {
+	if ((mode & SIO_REC) && par.rchan < rtp->nch) {
 		logx("%s: %d: unsupported recording chans", dev, par.rchan);
 		goto err_close;
 	}
