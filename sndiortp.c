@@ -481,16 +481,18 @@ rtp_recvpkt(struct rtp *rtp, struct rtp_sock *sock)
 	src = rtp_findsrc(rtp, ssrc);
 	if (src != NULL) {
 		if (seq != src->seq) {
-			if (verbose)
+			if (verbose) {
 				logx("ssrc 0x%x: %u: bad seq number (expected %u)",
 				    src->ssrc, seq, src->seq);
+			}
 			rtp_dropsrc(rtp, src);
 			return 1;
 		}
 		if (ts != src->ts) {
-			if (verbose)
+			if (verbose) {
 				logx("ssrc 0x%x: %u: bad time-stamp (expected %u)",
 				    src->ssrc, ts, src->ts);
+			}
 			rtp_dropsrc(rtp, src);
 			return 1;
 		}
