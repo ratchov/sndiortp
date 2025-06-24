@@ -475,7 +475,7 @@ rtp_recvpkt(struct rtp *rtp, struct rtp_sock *sock)
 
 	if (flags & (1 << RTP_EXTENSION)) {
 		hdrext = ntohl(*(uint32_t *)(u.buf + offs));
-		offs += 4 * (hdrext & 0xffff);
+		offs += 4 * (1 + (hdrext & 0xffff));
 	}
 
 	src = rtp_findsrc(rtp, ssrc);
