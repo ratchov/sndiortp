@@ -264,6 +264,7 @@ rtp_bind(struct rtp *rtp, const char *host, const char *serv)
 	aihints.ai_family = AF_UNSPEC;
 	aihints.ai_socktype = SOCK_DGRAM;
 	aihints.ai_protocol = IPPROTO_UDP;
+	aihints.ai_flags = AI_PASSIVE;
 
 	error = getaddrinfo(host[0] ? host : NULL, serv, &aihints, &ailist);
 	if (error) {
