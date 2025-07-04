@@ -19,6 +19,7 @@ install:
 
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/sndiortp
+	rm -f $(DESTDIR)$(MAN1DIR)/sndiortp.1
 
 sndiortp: sndiortp.o
 	$(CC) $(LDFLAGS) -o sndiortp sndiortp.o $(LIBS)
