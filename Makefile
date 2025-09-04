@@ -15,7 +15,7 @@ install:
 	mkdir -p $(DESTDIR)$(BINDIR)
 	mkdir -p $(DESTDIR)$(MAN1DIR)
 	cp sndiortp $(DESTDIR)$(BINDIR)
-	cp sndiortp.1 $(DESTDIR)$(MAN1DIR)
+	cp $(SRCDIR)/sndiortp.1 $(DESTDIR)$(MAN1DIR)
 
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/sndiortp
