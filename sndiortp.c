@@ -62,8 +62,7 @@ struct rtp {
 		struct rtp_sock *next;
 		int fd;
 		int family;
-		int can_recv;
-	} *sock_list;
+	} *send_sock_list, *recv_sock_list;
 
 	struct rtp_src {
 		struct rtp_src *next;
@@ -197,22 +196,14 @@ rtp_gettime(void)
 }
 
 /*
- * Find the rtp_sock structure of the given address family (IP or IPV6),
- * if it doesn't exist, create it.
+ * Create a socket for the given address family (IP or IPV6) and
+ * append it to the given list.
  */
 struct rtp_sock *
-rtp_mksock(struct rtp *rtp, int family, int can_recv)
+rtp_addsock(struct rtp *rtp, struct rtp_sock **list, int family)
 {
 	struct rtp_sock *sock;
 	int fd, opt;
-
-	for (sock = rtp->sock_list; sock != NULL; sock = sock->next) {
-		if (sock->family == family) {
-			if (can_recv)
-				sock->can_recv = 1;
-			return sock;
-		}
-	}
 
 	sock = malloc(sizeof(struct rtp_sock));
 	if (sock == NULL) {
@@ -240,13 +231,30 @@ rtp_mksock(struct rtp *rtp, int family, int can_recv)
 		}
 	}
 
+	logx("added fd %d", fd);
+
 	sock->fd = fd;
 	sock->family = family;
-	sock->can_recv = can_recv;
-	sock->next = rtp->sock_list;
-	rtp->sock_list = sock;
+	sock->next = *list;
+	*list = sock;
 
 	return sock;
+}
+
+/*
+ * Find the rtp_sock structure of the given address family (IP or IPV6).
+ */
+struct rtp_sock *
+rtp_findsock(struct rtp *rtp, struct rtp_sock **list, int family)
+{
+	struct rtp_sock *sock;
+
+	for (sock = *list; sock != NULL; sock = sock->next) {
+		if (sock->family == family)
+			return sock;
+	}
+
+	return NULL;
 }
 
 /*
@@ -274,7 +282,9 @@ rtp_bind(struct rtp *rtp, const char *host, const char *serv)
 
 	for (ai = ailist; ai != NULL; ai = ai->ai_next) {
 
-		sock = rtp_mksock(rtp, ai->ai_family, 1);
+		sock = rtp_findsock(rtp, &rtp->recv_sock_list, ai->ai_family);
+		if (sock == NULL)
+			sock = rtp_addsock(rtp, &rtp->recv_sock_list, ai->ai_family);
 
 		if (bind(sock->fd, ai->ai_addr, ai->ai_addrlen) == -1) {
 			logx("bind: %s", strerror(errno));
@@ -386,7 +396,9 @@ rtp_mkdst(struct rtp *rtp, const char *host, const char *serv)
 	dst->seq = arc4random();
 	dst->ts = arc4random();
 	dst->ssrc = arc4random();
-	dst->sock = rtp_mksock(rtp, ai->ai_family, 0);
+	dst->sock = rtp_findsock(rtp, &rtp->send_sock_list, ai->ai_family);
+	if (dst->sock == NULL)
+		dst->sock = rtp_addsock(rtp, &rtp->send_sock_list, ai->ai_family);
 
 	dst->next = rtp->dst_list;
 	rtp->dst_list = dst;
@@ -796,7 +808,8 @@ rtp_init(struct rtp *rtp, unsigned int bits, unsigned int nch, unsigned int rate
 	struct rtp_src *src;
 	int i;
 
-	rtp->sock_list = NULL;
+	rtp->recv_sock_list = NULL;
+	rtp->send_sock_list = NULL;
 	rtp->src_list = rtp->src_freelist = NULL;
 	rtp->dst_list = NULL;
 
@@ -848,8 +861,13 @@ rtp_done(struct rtp *rtp)
 		rtp->dst_list = dst->next;
 		free(dst);
 	}
-	while ((sock = rtp->sock_list) != NULL) {
-		rtp->sock_list = sock->next;
+	while ((sock = rtp->recv_sock_list) != NULL) {
+		rtp->recv_sock_list = sock->next;
+		close(sock->fd);
+		free(sock);
+	}
+	while ((sock = rtp->send_sock_list) != NULL) {
+		rtp->send_sock_list = sock->next;
 		close(sock->fd);
 		free(sock);
 	}
@@ -929,10 +947,8 @@ mainloop(struct rtp *rtp, const char *dev, unsigned int blksz)
 	 * count the number of descriptor to poll for incoming packets
 	 */
 	nfds = 0;
-	for (sock = rtp->sock_list; sock != NULL; sock = sock->next) {
-		if (sock->can_recv)
-			nfds++;
-	}
+	for (sock = rtp->recv_sock_list; sock != NULL; sock = sock->next)
+		nfds++;
 
 	mode = 0;
 	if (nfds > 0)
@@ -1022,9 +1038,7 @@ mainloop(struct rtp *rtp, const char *dev, unsigned int blksz)
 			break;
 
 		nfds = 0;
-		for (sock = rtp->sock_list; sock != NULL; sock = sock->next) {
-			if (!sock->can_recv)
-				continue;
+		for (sock = rtp->recv_sock_list; sock != NULL; sock = sock->next) {
 			pfds[nfds].fd = sock->fd;
 			pfds[nfds].events = POLLIN;
 			nfds++;
@@ -1048,9 +1062,7 @@ mainloop(struct rtp *rtp, const char *dev, unsigned int blksz)
 		rtp_time = rtp_gettime() - rtp_time_base;
 
 		nfds = 0;
-		for (sock = rtp->sock_list; sock != NULL; sock = sock->next) {
-			if (!sock->can_recv)
-				continue;
+		for (sock = rtp->recv_sock_list; sock != NULL; sock = sock->next) {
 			if (pfds[nfds].revents & POLLIN) {
 				while (rtp_recvpkt(rtp, sock))
 					;
