@@ -1,6 +1,8 @@
-CFLAGS = -Wall -O2 -g
-LIBS = -lsndio
 SRCDIR = .
+
+INCLUDE =	# extra -I
+DEFS =		# extra -D
+LIB =		# extra -L and -l
 
 PREFIX = /usr/local
 BINDIR = $(PREFIX)/bin
@@ -22,7 +24,7 @@ uninstall:
 	rm -f $(DESTDIR)$(MAN1DIR)/sndiortp.1
 
 sndiortp: sndiortp.o
-	$(CC) $(LDFLAGS) -o sndiortp sndiortp.o $(LIBS)
+	$(CC) $(LDFLAGS) -o sndiortp sndiortp.o -lsndio $(LIB)
 
 sndiortp.o: $(SRCDIR)/sndiortp.c
-	$(CC) $(CFLAGS) -c $(SRCDIR)/sndiortp.c
+	$(CC) $(CFLAGS) $(DEFS) $(INCLUDE) -c $(SRCDIR)/sndiortp.c
