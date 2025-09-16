@@ -231,8 +231,6 @@ rtp_addsock(struct rtp *rtp, struct rtp_sock **list, int family)
 		}
 	}
 
-	logx("added fd %d", fd);
-
 	sock->fd = fd;
 	sock->family = family;
 	sock->next = *list;
