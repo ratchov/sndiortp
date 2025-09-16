@@ -104,6 +104,7 @@ struct rtp {
 		struct rtp_sock *sock;
 	} *dst_list;
 
+	int maxsrc;
 	int rate;
 	size_t bps, nch, bufsz;
 };
@@ -126,14 +127,15 @@ long long rtp_time, rtp_time_base;
 
 const char usagestr[] = \
     "usage: sndiortp [-hvwx] [-b nframes] [-c channels] [-f device]\n"
-    "                [-l rtp://[addr][:port]] [-p bits] [-r rate] [-z nframes]\n"
-    "                [rtp://addr[:port] ...]\n";
+    "                [-l rtp://[addr][:port]] [-n count] [-p bits] [-r rate]\n"
+    "                [-z nframes] [rtp://addr[:port] ...]\n";
 
 const char helpstr[] =
     "\t-b receive buffer size\n"
     "\t-c RTP number of channels\n"
     "\t-f audio device name\n"
     "\t-l accept RTP streams on the given local address\n"
+    "\t-n max number of RTP streams\n"
     "\t-h print this help screen\n"
     "\t-p RTP audio samples precision in bits\n"
     "\t-r RTP audio sample rate\n"
@@ -821,6 +823,8 @@ rtp_init(struct rtp *rtp)
 	rtp->src_list = rtp->src_freelist = NULL;
 	rtp->dst_list = NULL;
 
+	rtp->maxsrc = RTP_MAXSRC;
+
 	rtp->rate = 48000;
 	rtp->bufsz = 2400;
 	rtp->bps = 3;
@@ -868,7 +872,7 @@ rtp_done(struct rtp *rtp)
  * any structures accordingly.
  */
 void
-rtp_start(struct rtp *rtp, unsigned int bits, unsigned int nch, unsigned int rate, size_t bufsz)
+rtp_start(struct rtp *rtp, unsigned int bits, unsigned int nch, unsigned int rate, size_t bufsz, unsigned int maxsrc)
 {
 	struct rtp_src *src;
 	int i;
@@ -877,8 +881,9 @@ rtp_start(struct rtp *rtp, unsigned int bits, unsigned int nch, unsigned int rat
 	rtp->bps = bits / 8;
 	rtp->nch = nch;
 	rtp->rate = rate;
+	rtp->maxsrc = maxsrc;
 
-	for (i = 0; i < RTP_MAXSRC; i++) {
+	for (i = 0; i < rtp->maxsrc; i++) {
 		src = malloc(sizeof(struct rtp_src));
 		if (src == NULL) {
 			perror("src");
@@ -1133,14 +1138,14 @@ main(int argc, char **argv)
 {
 	struct rtp rtp;
 	struct sigaction sa;
-	unsigned int mode = 0, bits = 24, rate = 48000, nch = 2, blksz = 0, bufsz = 0;
+	unsigned int mode = 0, bits = 24, rate = 48000, nch = 2, blksz = 0, bufsz = 0, maxsrc = RTP_MAXSRC;
 	char host[NI_MAXHOST], port[NI_MAXSERV];
 	const char *dev = SIO_DEVANY;
 	int c;
 
 	rtp_init(&rtp);
 
-	while ((c = getopt(argc, argv, "b:c:f:hl:p:r:vwxz:")) != -1) {
+	while ((c = getopt(argc, argv, "b:c:f:hl:n:p:r:vwxz:")) != -1) {
 		switch (c) {
 		case 'b':
 			if (sscanf(optarg, "%u", &bufsz) != 1)
@@ -1150,7 +1155,7 @@ main(int argc, char **argv)
 			if (sscanf(optarg, "%u", &nch) != 1)
 				goto bad_usage;
 			if (nch < 1 || nch > RTP_MAXCHAN) {
-				fputs("channels must be in the 1..256 range", stderr);
+				fputs("channels must be in the 1..64 range", stderr);
 				exit(1);
 			}
 			break;
@@ -1174,6 +1179,14 @@ main(int argc, char **argv)
 			if (!rtp_parseurl(optarg, host, port))
 				exit(1);
 			rtp_bind(&rtp, host, port);
+			break;
+		case 'n':
+			if (sscanf(optarg, "%u", &maxsrc) != 1)
+				goto bad_usage;
+			if (maxsrc < 1 || maxsrc > RTP_MAXSRC) {
+				fputs("number of streams must be in the 1..256 range", stderr);
+				exit(1);
+			}
 			break;
 		case 'r':
 			if (sscanf(optarg, "%u", &rate) != 1)
@@ -1231,7 +1244,7 @@ main(int argc, char **argv)
 		exit(1);
 	}
 
-	rtp_start(&rtp, bits, nch, rate, bufsz);
+	rtp_start(&rtp, bits, nch, rate, bufsz, maxsrc);
 	rtp_time_base = rtp_gettime();
 
 	mainloop(&rtp, dev, blksz, mode);

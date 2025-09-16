@@ -26,6 +26,7 @@
 .Op Fl c Ar channels
 .Op Fl f Ar device
 .Op Fl l No rtp:// Ns Oo Ar address Oc Ns Op : Ns Ar port
+.Op Fl n Ar count
 .Op Fl p Ar bits
 .Op Fl r Ar rate
 .Op Fl v Ar volume
@@ -76,6 +77,11 @@ If no
 is provided, then
 .Nm
 will accept packets from any address.
+.It Fl n Ar count
+Maximum number of RTP streams
+.Nm
+will accept.
+Default is 256.
 .It Fl p Ar bits
 The RTP bits per sample.
 Only 16 and 24 are supported.
