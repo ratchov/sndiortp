@@ -21,7 +21,7 @@
 .Nd play RTP streams or send recorded audio over RTP
 .Sh SYNOPSIS
 .Nm sndiortp
-.Op Fl hvx
+.Op Fl hvwx
 .Op Fl b Ar size
 .Op Fl c Ar channels
 .Op Fl f Ar device
@@ -86,6 +86,9 @@ The default is
 .Cm 48000 .
 .It Fl v
 Increase log verbosity.
+.It Fl w
+Don't exit if there are no RTP streams.
+May be used to test the audio device.
 .It Fl x
 Do not adjust the RTP source sample rate to the local audio device sample rate.
 Unless the local and remote clocks are synchronized, the

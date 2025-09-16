@@ -125,8 +125,8 @@ unsigned int rec_nch;
 long long rtp_time, rtp_time_base;
 
 const char usagestr[] = \
-    "usage: sndiortp [-hvx] [-b nframes] [-c channels] [-f device]\n"
-    "                [-l rtp://addr[:port]] [-p bits] [-r rate] [-z nframes]\n"
+    "usage: sndiortp [-hvwx] [-b nframes] [-c channels] [-f device]\n"
+    "                [-l rtp://[addr][:port]] [-p bits] [-r rate] [-z nframes]\n"
     "                [rtp://addr[:port] ...]\n";
 
 const char helpstr[] =
@@ -138,6 +138,7 @@ const char helpstr[] =
     "\t-p RTP audio samples precision in bits\n"
     "\t-r RTP audio sample rate\n"
     "\t-v increase log verbosity\n"
+    "\t-w don't exit if there are no RTP streams\n"
     "\t-x don't adjust RTP source sample rate\n"
     "\t-z audio device block size\n";
 
@@ -954,7 +955,7 @@ rtp_parseurl(const char *url, char *host, char *serv)
 }
 
 void
-mainloop(struct rtp *rtp, const char *dev, unsigned int blksz)
+mainloop(struct rtp *rtp, const char *dev, unsigned int blksz, unsigned int mode)
 {
 	struct rtp_sock *sock;
 	struct pollfd *pfds;
@@ -962,19 +963,10 @@ mainloop(struct rtp *rtp, const char *dev, unsigned int blksz)
 	struct sio_par par;
 	size_t nfds;
 	int events, n;
-	unsigned int mode;
 
-	/*
-	 * count the number of descriptor to poll for incoming packets
-	 */
-	nfds = 0;
-	for (sock = rtp->recv_sock_list; sock != NULL; sock = sock->next)
-		nfds++;
-
-	mode = 0;
-	if (nfds > 0)
+	if (rtp->recv_sock_list)
 		mode |= SIO_PLAY;
-	if (rtp->dst_list)
+	if (rtp->send_sock_list)
 		mode |= SIO_REC;
 
 	hdl = sio_open(dev, mode, 1);
@@ -982,6 +974,13 @@ mainloop(struct rtp *rtp, const char *dev, unsigned int blksz)
 		logx("%s: failed to open audio device", dev);
 		return;
 	}
+
+	/*
+	 * count the number of descriptor to poll for incoming packets
+	 */
+	nfds = 0;
+	for (sock = rtp->recv_sock_list; sock != NULL; sock = sock->next)
+		nfds++;
 
 	pfds = malloc((sio_nfds(hdl) + nfds) * sizeof(struct pollfd));
 	if (pfds == NULL) {
@@ -1134,14 +1133,14 @@ main(int argc, char **argv)
 {
 	struct rtp rtp;
 	struct sigaction sa;
-	unsigned int bits = 24, rate = 48000, nch = 2, blksz = 0, bufsz = 0;
+	unsigned int mode = 0, bits = 24, rate = 48000, nch = 2, blksz = 0, bufsz = 0;
 	char host[NI_MAXHOST], port[NI_MAXSERV];
 	const char *dev = SIO_DEVANY;
 	int c;
 
 	rtp_init(&rtp);
 
-	while ((c = getopt(argc, argv, "b:c:f:hl:p:r:vxz:")) != -1) {
+	while ((c = getopt(argc, argv, "b:c:f:hl:p:r:vwxz:")) != -1) {
 		switch (c) {
 		case 'b':
 			if (sscanf(optarg, "%u", &bufsz) != 1)
@@ -1187,6 +1186,9 @@ main(int argc, char **argv)
 		case 'v':
 			verbose++;
 			break;
+		case 'w':
+			mode = SIO_REC | SIO_PLAY;
+			break;
 		case 'x':
 			resample = 0;
 			break;
@@ -1215,7 +1217,7 @@ main(int argc, char **argv)
 		argv++;
 	}
 
-	if (rtp.recv_sock_list == NULL && rtp.send_sock_list == NULL) {
+	if (mode == 0 && !rtp.recv_sock_list && !rtp.send_sock_list) {
 	bad_usage:
 		fputs(usagestr, stderr);
 		exit(1);
@@ -1232,7 +1234,7 @@ main(int argc, char **argv)
 	rtp_start(&rtp, bits, nch, rate, bufsz);
 	rtp_time_base = rtp_gettime();
 
-	mainloop(&rtp, dev, blksz);
+	mainloop(&rtp, dev, blksz, mode);
 
 	rtp_done(&rtp);
 	return 0;
