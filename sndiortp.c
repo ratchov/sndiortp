@@ -797,11 +797,10 @@ rtp_mixbuf(struct rtp *rtp, void *mixbuf, size_t count)
 }
 
 /*
- * Initialize the rtp structure. Preallocate any structures that
- * will be needed before we go real-time.
+ * Initialize the rtp structure.
  */
-int
-rtp_init(struct rtp *rtp, unsigned int bits, unsigned int nch, unsigned int rate, size_t bufsz)
+void
+rtp_init(struct rtp *rtp)
 {
 	struct rtp_src *src;
 	int i;
@@ -811,28 +810,10 @@ rtp_init(struct rtp *rtp, unsigned int bits, unsigned int nch, unsigned int rate
 	rtp->src_list = rtp->src_freelist = NULL;
 	rtp->dst_list = NULL;
 
-	rtp->bufsz = bufsz;
-	rtp->bps = bits / 8;
-	rtp->nch = nch;
-	rtp->rate = rate;
-
-	for (i = 0; i < RTP_MAXSRC; i++) {
-		src = malloc(sizeof(struct rtp_src));
-		if (src == NULL) {
-			perror("src");
-			exit(1);
-		}
-		src->buf_len = 2 * rtp->bufsz;
-		src->buf = malloc(src->buf_len * rtp->nch * sizeof(int));
-		if (src->buf == NULL) {
-			perror("src->buf");
-			exit(1);
-		}
-		src->next = rtp->src_freelist;
-		rtp->src_freelist = src;
-	}
-
-	return 1;
+	rtp->rate = 48000;
+	rtp->bufsz = 2400;
+	rtp->bps = 3;
+	rtp->nch = 2;
 }
 
 /*
@@ -868,6 +849,38 @@ rtp_done(struct rtp *rtp)
 		rtp->send_sock_list = sock->next;
 		close(sock->fd);
 		free(sock);
+	}
+}
+
+/*
+ * Prepare for real-time operation: set sample rate, buffer size, preallocate
+ * any structures accordingly.
+ */
+void
+rtp_start(struct rtp *rtp, unsigned int bits, unsigned int nch, unsigned int rate, size_t bufsz)
+{
+	struct rtp_src *src;
+	int i;
+
+	rtp->bufsz = bufsz;
+	rtp->bps = bits / 8;
+	rtp->nch = nch;
+	rtp->rate = rate;
+
+	for (i = 0; i < RTP_MAXSRC; i++) {
+		src = malloc(sizeof(struct rtp_src));
+		if (src == NULL) {
+			perror("src");
+			exit(1);
+		}
+		src->buf_len = 2 * rtp->bufsz;
+		src->buf = malloc(src->buf_len * rtp->nch * sizeof(int));
+		if (src->buf == NULL) {
+			perror("src->buf");
+			exit(1);
+		}
+		src->next = rtp->src_freelist;
+		rtp->src_freelist = src;
 	}
 }
 
@@ -1116,6 +1129,8 @@ main(int argc, char **argv)
 	int listen = 0, c;
 	const char *dev = SIO_DEVANY;
 
+	rtp_init(&rtp);
+
 	while ((c = getopt(argc, argv, "b:c:f:hl:p:r:vxz:")) != -1) {
 		switch (c) {
 		case 'b':
@@ -1196,10 +1211,6 @@ main(int argc, char **argv)
 		exit(1);
 	}
 
-	rtp_time_base = rtp_gettime();
-
-	rtp_init(&rtp, bits, nch, rate, bufsz);
-
 	if (listen)
 		rtp_bind(&rtp, host, port);
 
@@ -1210,6 +1221,9 @@ main(int argc, char **argv)
 		argc--;
 		argv++;
 	}
+
+	rtp_start(&rtp, bits, nch, rate, bufsz);
+	rtp_time_base = rtp_gettime();
 
 	mainloop(&rtp, dev, blksz);
 
