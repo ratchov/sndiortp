@@ -235,7 +235,7 @@ rtp_mksock(struct rtp *rtp, int family, int can_recv)
 		opt = 1;
 		if (setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY,
 			&opt, sizeof(int)) == -1) {
-			logx("fcntl: IPV6_V6ONLY: %s", strerror(errno));
+			logx("setsockopt: IPV6_V6ONLY: %s", strerror(errno));
 			exit(1);
 		}
 	}
