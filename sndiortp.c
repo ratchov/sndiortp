@@ -62,6 +62,8 @@ struct rtp {
 		struct rtp_sock *next;
 		int fd;
 		int family;
+		struct sockaddr_storage sa;
+		socklen_t salen;
 	} *send_sock_list, *recv_sock_list;
 
 	struct rtp_src {
@@ -97,8 +99,6 @@ struct rtp {
 
 	struct rtp_dst {
 		struct rtp_dst *next;
-		struct sockaddr_storage sa;
-		socklen_t salen;
 		unsigned int seq, ts, ssrc;
 
 		struct rtp_sock *sock;
@@ -200,7 +200,7 @@ rtp_gettime(void)
  * append it to the given list.
  */
 struct rtp_sock *
-rtp_addsock(struct rtp *rtp, struct rtp_sock **list, int family)
+rtp_addsock(struct rtp *rtp, struct rtp_sock **list, int family, struct sockaddr *sa, socklen_t salen)
 {
 	struct rtp_sock *sock;
 	int fd, opt;
@@ -233,6 +233,8 @@ rtp_addsock(struct rtp *rtp, struct rtp_sock **list, int family)
 
 	sock->fd = fd;
 	sock->family = family;
+	memcpy(&sock->sa, sa, salen);
+	sock->salen = salen;
 	sock->next = *list;
 	*list = sock;
 
@@ -243,12 +245,14 @@ rtp_addsock(struct rtp *rtp, struct rtp_sock **list, int family)
  * Find the rtp_sock structure of the given address family (IP or IPV6).
  */
 struct rtp_sock *
-rtp_findsock(struct rtp *rtp, struct rtp_sock **list, int family)
+rtp_findsock(struct rtp *rtp, struct rtp_sock **list, int family, struct sockaddr *sa, socklen_t salen)
 {
 	struct rtp_sock *sock;
 
 	for (sock = *list; sock != NULL; sock = sock->next) {
-		if (sock->family == family)
+		if (sock->family == family &&
+		    sock->salen == salen &&
+		    memcmp(&sock->sa, sa, salen) == 0)
 			return sock;
 	}
 
@@ -280,9 +284,12 @@ rtp_bind(struct rtp *rtp, const char *host, const char *serv)
 
 	for (ai = ailist; ai != NULL; ai = ai->ai_next) {
 
-		sock = rtp_findsock(rtp, &rtp->recv_sock_list, ai->ai_family);
-		if (sock == NULL)
-			sock = rtp_addsock(rtp, &rtp->recv_sock_list, ai->ai_family);
+		if (rtp_findsock(rtp, &rtp->recv_sock_list,
+			ai->ai_family, ai->ai_addr, ai->ai_addrlen))
+			continue;
+
+		sock = rtp_addsock(rtp, &rtp->recv_sock_list,
+		    ai->ai_family, ai->ai_addr, ai->ai_addrlen);
 
 		if (bind(sock->fd, ai->ai_addr, ai->ai_addrlen) == -1) {
 			logx("bind: %s", strerror(errno));
@@ -389,14 +396,17 @@ rtp_mkdst(struct rtp *rtp, const char *host, const char *serv)
 		exit(1);
 	}
 
-	memcpy(&dst->sa, ai->ai_addr, ai->ai_addrlen);
-	dst->salen = ai->ai_addrlen;
 	dst->seq = arc4random();
 	dst->ts = arc4random();
 	dst->ssrc = arc4random();
-	dst->sock = rtp_findsock(rtp, &rtp->send_sock_list, ai->ai_family);
-	if (dst->sock == NULL)
-		dst->sock = rtp_addsock(rtp, &rtp->send_sock_list, ai->ai_family);
+
+	dst->sock = rtp_findsock(rtp, &rtp->send_sock_list,
+	    ai->ai_family, ai->ai_addr, ai->ai_addrlen);
+
+	if (dst->sock == NULL) {
+		dst->sock = rtp_addsock(rtp, &rtp->send_sock_list,
+		    ai->ai_family, ai->ai_addr, ai->ai_addrlen);
+	}
 
 	dst->next = rtp->dst_list;
 	rtp->dst_list = dst;
@@ -586,8 +596,8 @@ rtp_sendpkt(struct rtp *rtp, void *data, unsigned int count)
 		iov[1].iov_len = size;
 
 		memset(&msg, 0, sizeof(msg));
-		msg.msg_name = &dst->sa;
-		msg.msg_namelen = dst->salen;
+		msg.msg_name = &dst->sock->sa;
+		msg.msg_namelen = dst->sock->salen;
 		msg.msg_control = NULL;
 		msg.msg_controllen = 0;
 		msg.msg_iov = iov;
@@ -1126,8 +1136,8 @@ main(int argc, char **argv)
 	struct sigaction sa;
 	unsigned int bits = 24, rate = 48000, nch = 2, blksz = 0, bufsz = 0;
 	char host[NI_MAXHOST], port[NI_MAXSERV];
-	int listen = 0, c;
 	const char *dev = SIO_DEVANY;
+	int c;
 
 	rtp_init(&rtp);
 
@@ -1162,9 +1172,9 @@ main(int argc, char **argv)
 			exit(0);
 			break;
 		case 'l':
-			listen = 1;
 			if (!rtp_parseurl(optarg, host, port))
 				exit(1);
+			rtp_bind(&rtp, host, port);
 			break;
 		case 'r':
 			if (sscanf(optarg, "%u", &rate) != 1)
@@ -1197,7 +1207,15 @@ main(int argc, char **argv)
 	argc -= optind;
 	argv += optind;
 
-	if (!listen && argc == 0) {
+	while (argc > 0) {
+		if (!rtp_parseurl(argv[0], host, port))
+			exit(1);
+		rtp_mkdst(&rtp, host, port);
+		argc--;
+		argv++;
+	}
+
+	if (rtp.recv_sock_list == NULL && rtp.send_sock_list == NULL) {
 	bad_usage:
 		fputs(usagestr, stderr);
 		exit(1);
@@ -1209,17 +1227,6 @@ main(int argc, char **argv)
 	if (sigaction(SIGINT, &sa, NULL) == -1) {
 		perror("sigaction(int) failed");
 		exit(1);
-	}
-
-	if (listen)
-		rtp_bind(&rtp, host, port);
-
-	while (argc > 0) {
-		if (!rtp_parseurl(argv[0], host, port))
-			exit(1);
-		rtp_mkdst(&rtp, host, port);
-		argc--;
-		argv++;
 	}
 
 	rtp_start(&rtp, bits, nch, rate, bufsz);
