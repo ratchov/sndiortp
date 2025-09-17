@@ -960,7 +960,9 @@ rtp_parseurl(const char *url, char *host, char *serv)
 }
 
 void
-mainloop(struct rtp *rtp, const char *dev, unsigned int blksz, unsigned int mode)
+mainloop(struct rtp *rtp, const char *dev,
+	unsigned int bits, unsigned int rate, unsigned int nch,
+	size_t blksz, size_t bufsz, unsigned int mode, unsigned int maxsrc)
 {
 	struct rtp_sock *sock;
 	struct pollfd *pfds;
@@ -997,26 +999,26 @@ mainloop(struct rtp *rtp, const char *dev, unsigned int blksz, unsigned int mode
 	par.round = blksz;
 	par.appbufsz = 2 * par.round;
 	par.bits = 32;
-	par.rate = rtp->rate;
-	par.pchan = rtp->nch;
-	par.rchan = rtp->nch;
+	par.rate = rate;
+	par.pchan = nch;
+	par.rchan = nch;
 
 	if (!sio_setpar(hdl, &par) || !sio_getpar(hdl, &par)) {
 		logx("%s: failed to set parameters", dev);
 		goto err_close;
 	}
 
-	if (par.bits != 32 || par.le != SIO_LE_NATIVE || par.rate != rtp->rate) {
+	if (par.bits != 32 || par.le != SIO_LE_NATIVE || par.rate != rate) {
 		logx("%s: unsupported audio parameters", dev);
 		goto err_close;
 	}
 
-	if ((mode & SIO_PLAY) && par.pchan < rtp->nch) {
+	if ((mode & SIO_PLAY) && par.pchan < nch) {
 		logx("%s: %d: unsupported playback chans", dev, par.pchan);
 		goto err_close;
 	}
 
-	if ((mode & SIO_REC) && par.rchan < rtp->nch) {
+	if ((mode & SIO_REC) && par.rchan < nch) {
 		logx("%s: %d: unsupported recording chans", dev, par.rchan);
 		goto err_close;
 	}
@@ -1045,13 +1047,16 @@ mainloop(struct rtp *rtp, const char *dev, unsigned int blksz, unsigned int mode
 
 	logx("device period: %d samples", par.round);
 	logx("device buffer: %d samples", par.appbufsz);
-	logx("packet buffer: %zd samples", rtp->bufsz);
+	logx("packet buffer: %zd samples", bufsz);
 	logx("mode:%s%s",
 	  (mode & SIO_PLAY) ? " play" : "",
 	  (mode & SIO_REC) ? " rec" : "");
 
 	if (mlockall(MCL_CURRENT | MCL_FUTURE) == -1)
 		perror("mlockall");
+
+	rtp_start(rtp, bits, nch, rate, bufsz, maxsrc);
+	rtp_time_base = rtp_gettime();
 
 	if (!sio_start(hdl)) {
 		logx("%s: failed to start", dev);
@@ -1244,10 +1249,7 @@ main(int argc, char **argv)
 		exit(1);
 	}
 
-	rtp_start(&rtp, bits, nch, rate, bufsz, maxsrc);
-	rtp_time_base = rtp_gettime();
-
-	mainloop(&rtp, dev, blksz, mode);
+	mainloop(&rtp, dev, bits, rate, nch, blksz, bufsz, mode, maxsrc);
 
 	rtp_done(&rtp);
 	return 0;
