@@ -106,6 +106,7 @@ struct rtp {
 
 	int maxsrc;
 	int rate;
+	int blksz;
 	size_t bps, nch, bufsz;
 };
 
@@ -633,16 +634,17 @@ rtp_sendpkt(struct rtp *rtp, void *data, unsigned int count)
  * possibly splitting the block into multiple packets.
  */
 void
-rtp_sendblk(struct rtp *rtp, int *data, unsigned int nsamp)
+rtp_sendblk(struct rtp *rtp, int *data)
 {
 	unsigned char pktdata[RTP_MAXDATA];
 	unsigned char *p;
 	int *q;
-	unsigned int npkt, pktsz, maxsamp, maxpktsz;
+	unsigned int npkt, pktsz, nsamp, maxsamp, maxpktsz;
 	unsigned int bpf;
 	int i, c, s;
 
 	bpf = rtp->bps * rtp->nch;
+	nsamp = rtp->blksz;
 	maxsamp = RTP_MAXDATA / bpf;
 	npkt = (nsamp + maxsamp - 1) / maxsamp;
 	maxpktsz = (nsamp + npkt - 1) / npkt;
@@ -691,11 +693,13 @@ rtp_srcoffs(struct rtp *rtp, struct rtp_src *src)
  * pointer and the RTP receive pointer constant.
  */
 void
-rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, int *mixbuf, size_t todo)
+rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, int *mixbuf)
 {
-	size_t j;
+	size_t todo, j;
 	long long s, offs, avg, cnt;
 	int *q;
+
+	todo = rtp->blksz;
 
 	if (!src->started) {
 		if (src->buf_used < rtp->bufsz)
@@ -797,15 +801,15 @@ rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, int *mixbuf, size_t todo)
  * Prodice a block of audio samples by mixing all RTP sources
  */
 void
-rtp_mixbuf(struct rtp *rtp, void *mixbuf, size_t count)
+rtp_mixbuf(struct rtp *rtp, void *mixbuf)
 {
 	struct rtp_src *src, *srcnext;
 
-	memset(mixbuf, 0, count * play_nch * sizeof(int));
+	memset(mixbuf, 0, rtp->blksz * play_nch * sizeof(int));
 
 	for (src = rtp->src_list; src != NULL; src = srcnext) {
 		srcnext = src->next;
-		rtp_mixsrc(rtp, src, mixbuf, count);
+		rtp_mixsrc(rtp, src, mixbuf);
 	}
 }
 
@@ -869,11 +873,13 @@ rtp_done(struct rtp *rtp)
  * any structures accordingly.
  */
 void
-rtp_start(struct rtp *rtp, unsigned int bits, unsigned int nch, unsigned int rate, size_t bufsz, unsigned int maxsrc)
+rtp_start(struct rtp *rtp, unsigned int bits, unsigned int nch, unsigned int rate,
+	size_t blksz, size_t bufsz, unsigned int maxsrc)
 {
 	struct rtp_src *src;
 	int i;
 
+	rtp->blksz = blksz;
 	rtp->bufsz = bufsz;
 	rtp->bps = bits / 8;
 	rtp->nch = nch;
@@ -1052,7 +1058,7 @@ mainloop(struct rtp *rtp, const char *dev,
 	if (mlockall(MCL_CURRENT | MCL_FUTURE) == -1)
 		perror("mlockall");
 
-	rtp_start(rtp, bits, nch, rate, bufsz, maxsrc);
+	rtp_start(rtp, bits, nch, rate, par.round, bufsz, maxsrc);
 	rtp_time_base = rtp_gettime();
 
 	if (!sio_start(hdl)) {
@@ -1104,7 +1110,7 @@ mainloop(struct rtp *rtp, const char *dev,
 			if (play_start == play_end) {
 				play_start = 0;
 				play_end = play_size;
-				rtp_mixbuf(rtp, play_buf, par.round);
+				rtp_mixbuf(rtp, play_buf);
 			}
 			n = sio_write(hdl, play_buf + play_start, play_end - play_start);
 			play_start += n;
@@ -1118,7 +1124,7 @@ mainloop(struct rtp *rtp, const char *dev,
 			rec_end += n;
 
 			if (rec_end == rec_size) {
-				rtp_sendblk(rtp, rec_buf, par.round);
+				rtp_sendblk(rtp, rec_buf);
 				rec_start = 0;
 				rec_end = 0;
 			}
