@@ -107,6 +107,7 @@ struct rtp {
 	int maxsrc;
 	int rate;
 	int blksz;
+	int quota;
 	size_t bps, nch, bufsz;
 };
 
@@ -197,6 +198,28 @@ rtp_gettime(void)
 	}
 
 	return 1000000000LL * ts.tv_sec + ts.tv_nsec;
+}
+
+/*
+ * Calculate the number of incoming samples we're allowed to receive
+ * during the next block
+ */
+static void rtp_quota_reset(struct rtp *rtp)
+{
+	rtp->quota = (3 * rtp->maxsrc * rtp->blksz + 1) / 2;
+}
+
+/*
+ * Consume receiver packet quota
+ */
+static void rtp_quota_acct(struct rtp *rtp, int nsamp)
+{
+	if (nsamp >= rtp->blksz)
+		nsamp = rtp->blksz;
+	if (rtp->quota < nsamp)
+		rtp->quota = 0;
+	else
+		rtp->quota -= nsamp;
 }
 
 /*
@@ -443,6 +466,9 @@ rtp_recvpkt(struct rtp *rtp, struct rtp_sock *sock)
 	size_t offs, nsamp, end, avail, count, i, j;
 	int s, *p;
 
+	if (rtp->quota <= 0)
+		return 0;
+
 	iov[0].iov_base = u.buf;
 	iov[0].iov_len = RTP_MTU;
 
@@ -526,6 +552,8 @@ rtp_recvpkt(struct rtp *rtp, struct rtp_sock *sock)
 
 	data = u.buf + offs;
 	nsamp = (size - offs) / (rtp->bps * rtp->nch);
+
+	rtp_quota_acct(rtp, nsamp);
 
 	src->ts += nsamp;
 	src->seq = (src->seq + 1) & 0xffff;
@@ -811,6 +839,8 @@ rtp_mixbuf(struct rtp *rtp, void *mixbuf)
 		srcnext = src->next;
 		rtp_mixsrc(rtp, src, mixbuf);
 	}
+
+	rtp_quota_reset(rtp);
 }
 
 /*
@@ -901,6 +931,8 @@ rtp_start(struct rtp *rtp, unsigned int bits, unsigned int nch, unsigned int rat
 		src->next = rtp->src_freelist;
 		rtp->src_freelist = src;
 	}
+
+	rtp_quota_reset(rtp);
 }
 
 /*
@@ -1071,10 +1103,12 @@ mainloop(struct rtp *rtp, const char *dev,
 			break;
 
 		nfds = 0;
-		for (sock = rtp->recv_sock_list; sock != NULL; sock = sock->next) {
-			pfds[nfds].fd = sock->fd;
-			pfds[nfds].events = POLLIN;
-			nfds++;
+		if (rtp->quota > 0) {
+			for (sock = rtp->recv_sock_list; sock != NULL; sock = sock->next) {
+				pfds[nfds].fd = sock->fd;
+				pfds[nfds].events = POLLIN;
+				nfds++;
+			}
 		}
 
 		events = 0;
@@ -1095,12 +1129,14 @@ mainloop(struct rtp *rtp, const char *dev,
 		rtp_time = rtp_gettime() - rtp_time_base;
 
 		nfds = 0;
-		for (sock = rtp->recv_sock_list; sock != NULL; sock = sock->next) {
-			if (pfds[nfds].revents & POLLIN) {
-				while (rtp_recvpkt(rtp, sock))
-					;
+		if (rtp->quota > 0) {
+			for (sock = rtp->recv_sock_list; sock != NULL; sock = sock->next) {
+				if (pfds[nfds].revents & POLLIN) {
+					while (rtp_recvpkt(rtp, sock))
+						;
+				}
+				nfds++;
 			}
-			nfds++;
 		}
 
 		events = sio_revents(hdl, &pfds[nfds]);
