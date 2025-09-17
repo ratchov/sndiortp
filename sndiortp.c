@@ -815,9 +815,6 @@ rtp_mixbuf(struct rtp *rtp, void *mixbuf, size_t count)
 void
 rtp_init(struct rtp *rtp)
 {
-	struct rtp_src *src;
-	int i;
-
 	rtp->recv_sock_list = NULL;
 	rtp->send_sock_list = NULL;
 	rtp->src_list = rtp->src_freelist = NULL;
