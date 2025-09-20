@@ -1018,6 +1018,29 @@ rtp_parseurl(const char *url, char *host, char *serv)
 }
 
 void
+onxrun_cb(void *arg)
+{
+	struct rtp *rtp = arg;
+	struct rtp_src *src;
+	struct rtp_dst *dst;
+
+	logx("xrun");
+
+	/*
+	 * break the RTP packet sequence, forcing the receiver to reset
+	 */
+	for (dst = rtp->dst_list; dst != NULL; dst = dst->next)
+		dst->seq = arc4random();
+
+	/*
+	 * stop inbound streams, they will restart automatically,
+	 * resetting the offset/resampling feedback loop
+	 */
+	for (src = rtp->src_list; src != NULL; src = src->next)
+		src->started = 0;
+}
+
+void
 mainloop(struct rtp *rtp, const char *dev,
 	unsigned int bits, unsigned int rate, unsigned int nch,
 	size_t blksz, size_t bufsz, unsigned int mode, unsigned int maxsrc)
@@ -1115,6 +1138,8 @@ mainloop(struct rtp *rtp, const char *dev,
 
 	rtp_start(rtp, bits, nch, rate, par.round, bufsz, maxsrc);
 	rtp_time_base = rtp_gettime();
+
+	sio_onxrun(hdl, onxrun_cb, rtp);
 
 	if (!sio_start(hdl)) {
 		logx("%s: failed to start", dev);
