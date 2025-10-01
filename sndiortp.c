@@ -350,7 +350,7 @@ rtp_addsrc(struct rtp *rtp, unsigned int ssrc, unsigned int seq, unsigned int ts
 	src->next = rtp->src_list;
 	rtp->src_list = src;
 	if (verbose >= 3)
-		logx("ssrc 0x%x: created", src->ssrc);
+		logx("ssrc 0x%08x: created", src->ssrc);
 	return src;
 }
 
@@ -365,7 +365,7 @@ rtp_dropsrc(struct rtp *rtp, struct rtp_src *src)
 	psrc = &rtp->src_list;
 	while (1) {
 		if (src == NULL) {
-			logx("ssrc 0x%x: not found", src->ssrc);
+			logx("ssrc 0x%08x: not found", src->ssrc);
 			exit(1);
 		}
 		if (src == *psrc) {
@@ -373,7 +373,7 @@ rtp_dropsrc(struct rtp *rtp, struct rtp_src *src)
 			src->next = rtp->src_freelist;
 			rtp->src_freelist = src;
 			if (verbose >= 3)
-				logx("ssrc 0x%x: dropped", src->ssrc);
+				logx("ssrc 0x%08x: dropped", src->ssrc);
 			break;
 		}
 		psrc = &(*psrc)->next;
@@ -533,7 +533,7 @@ rtp_recvpkt(struct rtp *rtp, struct rtp_sock *sock)
 	if (src != NULL) {
 		if (seq != src->seq) {
 			if (verbose) {
-				logx("ssrc 0x%x: %u: bad seq number (expected %u)",
+				logx("ssrc 0x%08x: %u: bad seq number (expected %u)",
 				    src->ssrc, seq, src->seq);
 			}
 			rtp_dropsrc(rtp, src);
@@ -541,7 +541,7 @@ rtp_recvpkt(struct rtp *rtp, struct rtp_sock *sock)
 		}
 		if (ts != src->ts) {
 			if (verbose) {
-				logx("ssrc 0x%x: %u: bad time-stamp (expected %u)",
+				logx("ssrc 0x%08x: %u: bad time-stamp (expected %u)",
 				    src->ssrc, ts, src->ts);
 			}
 			rtp_dropsrc(rtp, src);
@@ -562,7 +562,7 @@ rtp_recvpkt(struct rtp *rtp, struct rtp_sock *sock)
 
 		if (src->buf_used >= src->buf_len) {
 			if (verbose)
-				logx("ssrc 0x%x: overflow", src->ssrc);
+				logx("ssrc 0x%08x: overflow", src->ssrc);
 			rtp_dropsrc(rtp, src);
 			return 1;
 		}
@@ -733,7 +733,7 @@ rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, int *mixbuf)
 		if (src->buf_used < rtp->bufsz)
 			return;
 		if (verbose)
-			logx("ssrc 0x%x: started", src->ssrc);
+			logx("ssrc 0x%08x: started", src->ssrc);
 		src->started = 1;
 		src->freq = RTP_MULT;
 		src->diff = RTP_MULT;
@@ -792,7 +792,7 @@ rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, int *mixbuf)
 		if (src->diff >= src->freq) {
 			if (src->buf_used == 0) {
 				if (verbose)
-					logx("ssrc 0x%x: stopped", src->ssrc);
+					logx("ssrc 0x%08x: stopped", src->ssrc);
 				rtp_dropsrc(rtp, src);
 				break;
 			}
