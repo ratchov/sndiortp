@@ -25,12 +25,12 @@
 .Op Fl b Ar size
 .Op Fl c Ar channels
 .Op Fl f Ar device
-.Op Fl l Ar rtp://[address][:port]
+.Op Fl l No rtp:// Ns Oo Ar address Oc Ns Op : Ns Ar port
 .Op Fl p Ar bits
 .Op Fl r Ar rate
 .Op Fl v Ar volume
 .Op Fl z Ar size
-.Op Ar [ rtp://host[:port] ... ]
+.Op rtp:// Ns Ar host Ns Oo : Ns Ar port Oc Ar ...
 .Sh DESCRIPTION
 The
 .Nm
@@ -69,9 +69,11 @@ Use this
 audio device.
 Default is
 .Pa default .
-.It Fl l Ar rtp://[address][:port]
+.It Fl l No rtp:// Ns Oo Ar address Oc Ns Op : Ns Ar port
 Accept RTP streams on the given local network address.
-If no address is provided, then
+If no
+.Ar address
+is provided, then
 .Nm
 will accept packets from any address.
 .It Fl p Ar bits
