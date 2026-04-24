@@ -364,7 +364,7 @@ rtp_dropsrc(struct rtp *rtp, struct rtp_src *src)
 
 	psrc = &rtp->src_list;
 	while (1) {
-		if (src == NULL) {
+		if (*psrc == NULL) {
 			logx("ssrc 0x%08x: not found", src->ssrc);
 			exit(1);
 		}
