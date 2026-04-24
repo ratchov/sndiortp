@@ -488,14 +488,19 @@ rtp_recvpkt(struct rtp *rtp, struct rtp_sock *sock)
 		exit(1);
 	}
 
-	if (msg.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) {
-		logx("recvmsg: truncated");
+	if (msg.msg_flags & MSG_CTRUNC) {
+		logx("recvmsg: control message truncated");
 		exit(1);
+	}
+
+	if (msg.msg_flags & MSG_TRUNC) {
+		logx("recvmsg: pkt truncated");
+		return 1;
 	}
 
 	if (size < sizeof(struct rtp_hdr)) {
 		logx("%zd: pkt size too short", size);
-		exit(1);
+		return 1;
 	}
 
 	flags = ntohs(u.hdr.flags);
@@ -509,17 +514,17 @@ rtp_recvpkt(struct rtp *rtp, struct rtp_sock *sock)
 
 	if (version != 2) {
 		logx("%d: unsupported version", version);
-		exit(1);
+		return 1;
 	}
 
 	if (type != 96) {
 		logx("%d: unexpected payload type", type);
-		exit(1);
+		return 1;
 	}
 
 	if (flags & (1 << RTP_PADDING)) {
 		logx("rtp padding not supported");
-		exit(1);
+		return 1;
 	}
 
 	src = rtp_findsrc(rtp, ssrc);
