@@ -507,8 +507,6 @@ rtp_recvpkt(struct rtp *rtp, struct rtp_sock *sock)
 	version = (flags >> RTP_VERSION) & RTP_VERSION_MASK;
 	type = (flags >> RTP_PAYLOAD) & RTP_PAYLOAD_MASK;
 
-	offs = sizeof(struct rtp_hdr) + 4 * ncsrc;
-
 	if (version != 2) {
 		logx("%d: unsupported version", version);
 		exit(1);
@@ -522,11 +520,6 @@ rtp_recvpkt(struct rtp *rtp, struct rtp_sock *sock)
 	if (flags & (1 << RTP_PADDING)) {
 		logx("rtp padding not supported");
 		exit(1);
-	}
-
-	if (flags & (1 << RTP_EXTENSION)) {
-		hdrext = ntohl(*(uint32_t *)(u.buf + offs));
-		offs += 4 * (1 + (hdrext & 0xffff));
 	}
 
 	src = rtp_findsrc(rtp, ssrc);
@@ -549,6 +542,28 @@ rtp_recvpkt(struct rtp *rtp, struct rtp_sock *sock)
 		}
 	} else
 		src = rtp_addsrc(rtp, ssrc, seq, ts);
+
+	/*
+	 * calculate and validate the payload offset
+	 */
+
+	offs = sizeof(struct rtp_hdr) + 4 * ncsrc;
+
+	if (flags & (1 << RTP_EXTENSION)) {
+		if (size < offs + sizeof(uint32_t)) {
+			logx("ssrc 0x%08x: malformed header", src->ssrc);
+			rtp_dropsrc(rtp, src);
+			return 1;
+		}
+		hdrext = ntohl(*(uint32_t *)(u.buf + offs));
+		offs += (1 + (hdrext & 0xffff)) * sizeof(uint32_t);
+	}
+
+	if (size < offs) {
+		logx("ssrc 0x%08x: header truncated", src->ssrc);
+		rtp_dropsrc(rtp, src);
+		return 1;
+	}
 
 	data = u.buf + offs;
 	nsamp = (size - offs) / (rtp->bps * rtp->nch);
