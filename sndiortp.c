@@ -115,7 +115,7 @@ void logx(const char *fmt, ...) __attribute__((__format__ (printf, 1, 2)));
 
 int resample = 1;
 int verbose;
-int quit;
+volatile sig_atomic_t quit;
 
 unsigned char *play_buf;
 size_t play_size, play_start, play_end;
