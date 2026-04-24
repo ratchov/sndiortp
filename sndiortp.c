@@ -438,7 +438,7 @@ rtp_mkdst(struct rtp *rtp, const char *host, const char *serv)
 	dst->next = rtp->dst_list;
 	rtp->dst_list = dst;
 
-	freeaddrinfo(ai);
+	freeaddrinfo(ailist);
 	return 1;
 }
 
