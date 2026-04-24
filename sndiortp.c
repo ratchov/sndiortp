@@ -338,7 +338,7 @@ rtp_addsrc(struct rtp *rtp, unsigned int ssrc, unsigned int seq, unsigned int ts
 	src = rtp->src_freelist;
 	if (src == NULL) {
 		logx("out of free src structures");
-		exit(1);
+		return NULL;
 	}
 
 	rtp->src_freelist = src->next;
@@ -545,8 +545,11 @@ rtp_recvpkt(struct rtp *rtp, struct rtp_sock *sock)
 			rtp_dropsrc(rtp, src);
 			return 1;
 		}
-	} else
+	} else {
 		src = rtp_addsrc(rtp, ssrc, seq, ts);
+		if (src == NULL)
+			return 1;
+	}
 
 	/*
 	 * calculate and validate the payload offset
