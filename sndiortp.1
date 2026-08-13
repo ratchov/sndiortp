@@ -21,7 +21,7 @@
 .Nd play RTP streams or send recorded audio over RTP
 .Sh SYNOPSIS
 .Nm sndiortp
-.Op Fl hvwx
+.Op Fl hsvwx
 .Op Fl b Ar size
 .Op Fl c Ar channels
 .Op Fl f Ar device
@@ -90,6 +90,8 @@ Default is 24.
 Sample rate in Hertz of the RTP stream.
 The default is
 .Cm 48000 .
+.It Fl s
+Sync all output streams to the first valid input stream.
 .It Fl v
 Increase log verbosity.
 .It Fl w

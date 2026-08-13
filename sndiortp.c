@@ -58,6 +58,9 @@ struct rtp_hdr {
 };
 
 struct rtp {
+	struct rtp_src *refclk;
+	int need_refclk;
+
 	struct rtp_sock {
 		struct rtp_sock *next;
 		int fd;
@@ -107,8 +110,16 @@ struct rtp {
 	struct rtp_dst {
 		struct rtp_dst *next;
 		unsigned int seq, ts, ssrc;
+		int started;
 
 		struct rtp_sock *sock;
+
+		/* local time of the last sample sent */
+		long long time;
+
+		struct rtp_resamp resamp;
+		struct rtp_corr offs;
+		int offs_cnt;
 	} *dst_list;
 
 	int maxsrc;
@@ -138,7 +149,7 @@ unsigned int rec_nch;
 long long rtp_time, rtp_time_base;
 
 const char usagestr[] = \
-    "usage: sndiortp [-hvwx] [-b nframes] [-c channels] [-f device]\n"
+    "usage: sndiortp [-hsvwx] [-b nframes] [-c channels] [-f device]\n"
     "                [-l rtp://[addr][:port]] [-n count] [-p bits] [-r rate]\n"
     "                [-z nframes] [rtp://addr[:port] ...]\n";
 
@@ -151,6 +162,7 @@ const char helpstr[] =
     "\t-h print this help screen\n"
     "\t-p RTP audio samples precision in bits\n"
     "\t-r RTP audio sample rate\n"
+    "\t-s Sync all outputs to the first input\n"
     "\t-v increase log verbosity\n"
     "\t-w don't exit if there are no RTP streams\n"
     "\t-x don't adjust RTP source sample rate\n"
@@ -337,6 +349,32 @@ rtp_resamp_do(struct rtp_resamp *resamp, int *ibuf, int *obuf, size_t *picnt, si
 	*pocnt -= ocnt;
 }
 
+void
+rtp_refclk_reset(struct rtp *rtp)
+{
+	struct rtp_src *src;
+	struct rtp_dst *dst;
+
+	src = rtp->src_list;
+	if (src != NULL) {
+		while (src->next != NULL)
+			src = src->next;
+	}
+
+	if (src == rtp->refclk)
+		return;
+
+	for (dst = rtp->dst_list; dst != NULL; dst = dst->next)
+		dst->started = 0;
+
+	if (src == NULL)
+		logx("%s: no clock", __func__);
+	else
+		logx("%s: ssrc 0x08%x: new clock", __func__, src->ssrc);
+
+	rtp->refclk = src;
+}
+
 /*
  * Create a socket for the given address family (IP or IPV6) and
  * append it to the given list.
@@ -466,6 +504,9 @@ rtp_addsrc(struct rtp *rtp, unsigned int ssrc, unsigned int seq, unsigned int ts
 	rtp->src_list = src;
 	if (verbose >= 3)
 		logx("ssrc 0x%08x: created", src->ssrc);
+
+	if (rtp->need_refclk)
+		rtp_refclk_reset(rtp);
 	return src;
 }
 
@@ -493,6 +534,9 @@ rtp_dropsrc(struct rtp *rtp, struct rtp_src *src)
 		}
 		psrc = &(*psrc)->next;
 	}
+
+	if (rtp->need_refclk)
+		rtp_refclk_reset(rtp);
 }
 
 /*
@@ -541,8 +585,9 @@ rtp_mkdst(struct rtp *rtp, const char *host, const char *serv)
 		exit(1);
 	}
 
-	dst->seq = arc4random();
-	dst->ts = arc4random();
+	dst->started = 0;
+	dst->seq = 0;
+	dst->ts = 0;
 
 	dst->sock = rtp_findsock(rtp, &rtp->send_sock_list,
 	    ai->ai_family, ai->ai_addr, ai->ai_addrlen);
@@ -795,6 +840,44 @@ rtp_dst_sendpkt(struct rtp *rtp, struct rtp_dst *dst, void *data, unsigned int c
 		logx("sent %d samples", count);
 }
 
+int
+rtp_src_ts(struct rtp *rtp, struct rtp_src *src)
+{
+	/*
+	 * Estimate the current time at the stream clock:
+	 *
+	 * After the packet is received, src->ts is increased and
+	 * src->time is set to the local time. In other words, both
+	 * correspond to the time of the last sample expressed using
+	 * the stream and the local clocks respectively.
+	 *
+	 * Consequently the stream time is src->ts corrected by
+	 * the elapsed time since the last sample (i.e. packet), which
+	 * is rtp_time - src->time.
+	 */
+	return src->ts + (rtp_time - src->time) * rtp->rate / 1000000000ULL;
+}
+
+int
+rtp_dst_ts(struct rtp *rtp, struct rtp_dst *dst)
+{
+	return dst->ts + (rtp_time - dst->time) * rtp->rate / 1000000000ULL;
+}
+
+/*
+ * Return the estimated offset, between this stream and the reference clock
+  */
+long long
+rtp_dstoffs(struct rtp *rtp, struct rtp_dst *dst)
+{
+	struct rtp_src *src = rtp->refclk;
+
+	if (src == NULL)
+		return 0;
+
+	return (long long)(rtp_src_ts(rtp, src) - rtp_dst_ts(rtp, dst)) * RTP_MULT;
+}
+
 /*
  * Send the given block of audio samples to the RTP destination,
  * possibly splitting the block into multiple packets.
@@ -803,14 +886,71 @@ void
 rtp_dst_sendblk(struct rtp *rtp, struct rtp_dst *dst, int *data)
 {
 	unsigned char pktdata[RTP_MAXDATA];
+	size_t icnt, ocnt;
 	unsigned char *p;
 	int *q;
 	unsigned int npkt, pktsz, nsamp, maxsamp, maxpktsz;
 	unsigned int bpf;
 	int i, c, s;
+	int ts, df;
+
+	if (!dst->started) {
+		/*
+		 * The time stamps (dst->ts and dst->time) represent the
+		 * last recorded sample (i.e sample "number -1"). It would
+		 * be recorded one block ago, so we've to substract blksz
+		 */
+		dst->time = rtp_time - 1000000000LL * rtp->blksz / rtp->rate;
+		if (rtp->need_refclk) {
+			if (rtp->refclk == NULL)
+				return;
+			dst->ts = rtp_src_ts(rtp, rtp->refclk) - rtp->blksz;
+		} else
+			dst->ts = 0;
+
+		rtp_resamp_init(&dst->resamp, rtp->nch);
+		rtp_corr_init(rtp, &dst->offs, rtp_dstoffs(rtp, dst));
+		dst->offs_cnt = 0;
+		dst->seq = 0;
+		dst->started = 1;
+		if (verbose)
+			logx("ssrc 0x%08x: started, ts = %u", dst->ssrc, dst->ts);
+	}
+
+	if (dst->offs_cnt >= rtp->rate) {
+
+		df = rtp_corr_freqdiff(rtp, &dst->offs, rtp_dstoffs(rtp, dst));
+
+		if (resample)
+			dst->resamp.freq -= df;
+
+		if (verbose >= 2) {
+			/*
+			 * To plot them with gnuplot, the following one-liner
+			 * could be used
+			 *
+			 *      grep dst-resamp: | sed 's/: resamp://g'
+			 *
+			 */
+			logx("dst-resamp: %+.12f %+7.3f",
+			    (double)(dst->resamp.freq - RTP_MULT) / RTP_MULT,
+			    (double)(dst->offs.val - dst->offs.target) / RTP_MULT);
+		}
+		dst->offs_cnt -= rtp->rate;
+	}
+	dst->offs_cnt += rtp->blksz;
+
+	icnt = rtp->blksz;
+	ocnt = rtp->tmpbuf_max;
+	rtp_resamp_do(&dst->resamp, data, rtp->tmpbuf, &icnt, &ocnt);
+
+	/*
+	 * split the data in multiple packets. convert to s24le3 and send
+	 * the packets
+	 */ 
 
 	bpf = rtp->bps * rtp->nch;
-	nsamp = rtp->blksz;
+	nsamp = ocnt;
 	maxsamp = RTP_MAXDATA / bpf;
 	npkt = (nsamp + maxsamp - 1) / maxsamp;
 	maxpktsz = (nsamp + npkt - 1) / npkt;
@@ -818,7 +958,7 @@ rtp_dst_sendblk(struct rtp *rtp, struct rtp_dst *dst, int *data)
 	if (verbose >= 3)
 		logx("sending %d bytes (%d pkts)", nsamp * bpf, npkt);
 
-	q = data;
+	q = rtp->tmpbuf;
 	while (nsamp > 0) {
 		pktsz = maxpktsz;
 		if (pktsz > nsamp)
@@ -840,6 +980,9 @@ rtp_dst_sendblk(struct rtp *rtp, struct rtp_dst *dst, int *data)
 		nsamp -= pktsz;
 		data += pktsz;
 	}
+
+	/* dst->ts was increased, update its local time as well */
+	dst->time = rtp_time;
 }
 
 void
@@ -982,6 +1125,8 @@ rtp_mixbuf(struct rtp *rtp, void *mixbuf)
 void
 rtp_init(struct rtp *rtp)
 {
+	rtp->need_refclk = 0;
+	rtp->refclk = NULL;
 	rtp->recv_sock_list = NULL;
 	rtp->send_sock_list = NULL;
 	rtp->src_list = rtp->src_freelist = NULL;
@@ -1143,7 +1288,6 @@ void
 onxrun_cb(void *arg)
 {
 	struct rtp *rtp = arg;
-	struct rtp_src *src;
 	struct rtp_dst *dst;
 
 	logx("xrun");
@@ -1152,14 +1296,16 @@ onxrun_cb(void *arg)
 	 * break the RTP packet sequence, forcing the receiver to reset
 	 */
 	for (dst = rtp->dst_list; dst != NULL; dst = dst->next)
-		dst->seq = arc4random();
+		dst->started = 0;
 
 	/*
 	 * stop inbound streams, they will restart automatically,
 	 * resetting the offset/resampling feedback loop
 	 */
-	for (src = rtp->src_list; src != NULL; src = src->next)
-		src->started = 0;
+	while (rtp->src_list)
+		rtp_dropsrc(rtp, rtp->src_list);
+
+	rtp->refclk = NULL;
 }
 
 void
@@ -1359,7 +1505,7 @@ main(int argc, char **argv)
 
 	rtp_init(&rtp);
 
-	while ((c = getopt(argc, argv, "b:c:f:hl:n:p:r:vwxz:")) != -1) {
+	while ((c = getopt(argc, argv, "b:c:f:hl:n:p:r:svwxz:")) != -1) {
 		switch (c) {
 		case 'b':
 			if (sscanf(optarg, "%u", &bufsz) != 1)
@@ -1409,6 +1555,9 @@ main(int argc, char **argv)
 				fputs("rate must be in the 8000..192000 range", stderr);
 				exit(1);
 			}
+			break;
+		case 's':
+			rtp.need_refclk = 1;
 			break;
 		case 'v':
 			verbose++;
