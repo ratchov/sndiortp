@@ -401,8 +401,11 @@ rtp_findsrc(struct rtp *rtp, unsigned int ssrc)
 int
 rtp_mkdst(struct rtp *rtp, const char *host, const char *serv)
 {
+	static unsigned int serial = 0;
 	struct rtp_dst *dst;
 	struct addrinfo *ailist, *ai, aihints;
+	unsigned char *sp;
+	size_t len;
 	int error;
 
 	memset(&aihints, 0, sizeof(struct addrinfo));
@@ -425,7 +428,6 @@ rtp_mkdst(struct rtp *rtp, const char *host, const char *serv)
 
 	dst->seq = arc4random();
 	dst->ts = arc4random();
-	dst->ssrc = arc4random();
 
 	dst->sock = rtp_findsock(rtp, &rtp->send_sock_list,
 	    ai->ai_family, ai->ai_addr, ai->ai_addrlen);
@@ -434,6 +436,12 @@ rtp_mkdst(struct rtp *rtp, const char *host, const char *serv)
 		dst->sock = rtp_addsock(rtp, &rtp->send_sock_list,
 		    ai->ai_family, ai->ai_addr, ai->ai_addrlen);
 	}
+
+	len = dst->sock->salen;
+	sp = (unsigned char *)&dst->sock->sa;
+	dst->ssrc = serial++;
+	while (len-- > 0)
+		dst->ssrc = dst->ssrc * 1999513 + *(sp++);
 
 	dst->next = rtp->dst_list;
 	rtp->dst_list = dst;
