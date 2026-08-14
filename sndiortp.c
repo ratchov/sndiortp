@@ -39,7 +39,7 @@
 #define RTP_DEFAULT_PORT	"5004"
 #define RTP_MAXSRC		256
 #define RTP_MAXCHAN		64
-#define RTP_MULT		0x1000000
+#define RTP_MULT		0x10000000
 
 struct rtp_hdr {
 #define RTP_VERSION		14
@@ -79,13 +79,17 @@ struct rtp {
 		long long time;
 
 		/*
-		 * Estimated offset (in samples) between the play pointer
-		 * and the last received sample. It's stored as a fixed-point
-		 * number (multiplied by RTP_MULT).
+		 * Correct frequency to minimize the difference
+		 * between `val` and `target`
 		 */
-		long long offs;
-		long long offs_target;			/* inital value */
-		long long offs_sum, offs_cnt;		/* averaging */
+		struct rtp_corr {
+			long long val;
+			long long target;
+			int k;
+			int g;
+		} offs;
+
+		int offs_cnt;
 
 		/*
 		 * Resampler to adjust stream frequency in order
@@ -226,6 +230,74 @@ static void rtp_quota_acct(struct rtp *rtp, int nsamp)
 		rtp->quota = 0;
 	else
 		rtp->quota -= nsamp;
+}
+
+void
+rtp_corr_init(struct rtp *rtp, struct rtp_corr *corr, long long target)
+{
+	corr->val = target;
+	corr->target = corr->val;
+
+	/*
+	 * During `dt` seconds the accumulated excess of samples is:
+	 *
+	 *	dx = (y * f - f0) * dt			(1)
+	 *
+	 * where `y` is the resampling factor (around ~1), f is the
+	 * RTP frequency and f0 is the device frequency (in Hz).
+	 *
+	 * The increase of the resampling factor `dy` will be
+	 * calculated as a liner function of `x` the current error
+	 * and its increment respectively:
+	 *
+	 *	dy = -(k / f * x * dt + g / f * dx)	(2)
+	 *
+	 * where `k / f` and `g / f` are two constants. If `dt` is
+	 * small enough, by combining above equations, we get:
+	 *
+	 * 	d^2 x / dt + g * dx / dt + k * x = 0	(3)
+	 *
+	 * This is the standard differential equation of the damped
+	 * harmonic oscillator). The `g` parameter is the inverse of
+	 * the decay time. We chose T seconds:
+	 *
+	 * 	g = 1 / T				(4)
+	 *
+	 * The fastest decay with no oscillations is achieved for:
+	 *
+	 *	g^2 = 4 * k				(5)
+	 *
+	 * which gives us `k`. The eq. 2 will be rewritten in a
+	 * more CPU friendly form:
+	 *
+	 * 	dy = -(k' * x + dx) * g'
+	 *
+	 * By combining with eq. 3, the new parameter is:
+	 *
+	 *	g' = 1 / (f * T)
+	 * 	k' = dt / (4 * T)
+	 *
+	 * Below, we recalculate `y` every second, i.e. dt = 1.
+	 */
+#define RTP_DECAY	5
+	corr->g = RTP_MULT / (RTP_DECAY * rtp->rate);
+	corr->k = RTP_MULT / (RTP_DECAY * 4);
+}
+
+int
+rtp_corr_freqdiff(struct rtp *rtp, struct rtp_corr *corr, long long val)
+{
+	long long derr, err;
+
+	/* Calculate current error and its increment during the cycle */
+	err = val - corr->target;
+	derr = val - corr->val;
+
+	/* new value */
+	corr->val = val;
+
+	/* Calculate the frequency correction */
+	return -(err * corr->k / RTP_MULT + derr) * corr->g / RTP_MULT;
 }
 
 void
@@ -785,8 +857,11 @@ rtp_sendblk(struct rtp *rtp, int *data)
 long long
 rtp_srcoffs(struct rtp *rtp, struct rtp_src *src)
 {
-	return src->buf_used +
-	    ((rtp_time - src->time) * rtp->rate + 500000000LL) / 1000000000LL;
+	long long delay;
+
+	delay = RTP_MULT * ((rtp_time - src->time) + 500000000LL) / 1000000000;
+
+	return RTP_MULT * src->buf_used + delay * rtp->rate;
 }
 
 /*
@@ -798,7 +873,8 @@ void
 rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, int *mixbuf)
 {
 	size_t todo, j, icnt, ocnt;
-	long long s, offs, avg, cnt;
+	long long s;
+	int df;
 	int *q;
 
 	todo = rtp->blksz;
@@ -810,53 +886,33 @@ rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, int *mixbuf)
 			logx("ssrc 0x%08x: started", src->ssrc);
 		src->started = 1;
 		rtp_resamp_init(&src->resamp, rtp->nch);
-		src->offs = RTP_MULT * rtp_srcoffs(rtp, src);
-		src->offs_target = src->offs;
+		rtp_corr_init(rtp, &src->offs, rtp_srcoffs(rtp, src));
 		src->offs_cnt = 0;
-		src->offs_sum = 0;
 	}
 
-	src->offs_cnt += todo;
-	src->offs_sum += todo * rtp_srcoffs(rtp, src);
+	if (src->offs_cnt >= rtp->rate) {
 
-	if (src->offs_cnt >= rtp->rate / 8) {
+		df = rtp_corr_freqdiff(rtp, &src->offs, rtp_srcoffs(rtp, src));
 
-		/*
-		 * estimate the time offset: calculate
-		 * the average offset over around 1 second (8 times
-		 * 1/8th of a second).
-		 */
-
-		/* save the old offset */
-		offs = src->offs;
-
-		/* average offset over the last 1/8th of second */
-		avg = RTP_MULT * (src->offs_sum + src->offs_cnt / 2) / src->offs_cnt;
-
-		/* low-pass the average offset, ~1 second decay time */
-		src->offs = (7 * src->offs + avg + 4) / 8;
-
-		/*
-		 * calculate resampling frequency that will
-		 * compensate the offset in roughly 128 seconds
-		 */
-		if (resample) {
-			cnt = RTP_MULT * src->offs_cnt;
-			src->resamp.freq = src->resamp.freq *
-			    (cnt - (src->offs - src->offs_target) / 128) /
-			    (cnt + (src->offs - offs));
-		}
+		if (resample)
+			src->resamp.freq += df;
 
 		if (verbose >= 2) {
-			logx("err = %+.3f / %.3f, freq = %.17f",
-			    (double)(src->offs - src->offs_target) / RTP_MULT,
-			    (double)src->offs_target / RTP_MULT,
-			    (double)src->resamp.freq / RTP_MULT);
+			/*
+			 * To plot them with gnuplot, the following one-liner
+			 * could be used
+			 *
+			 *      grep src-resamp: | sed 's/: resamp://g'
+			 *
+			 */
+			logx("src-resamp: %+.12f %+7.3f",
+			    (double)(src->resamp.freq - RTP_MULT) / RTP_MULT,
+			    (double)(src->offs.val - src->offs.target) / RTP_MULT);
 		}
 
-		src->offs_cnt = 0;
-		src->offs_sum = 0;
+		src->offs_cnt -= rtp->rate;
 	}
+	src->offs_cnt += rtp->blksz;
 
 	/*
 	 * Resample and add the data to 'mixbuf'.
