@@ -91,9 +91,12 @@ struct rtp {
 		 * Resampler to adjust stream frequency in order
 		 * to reach the desired offset
 		 */
-		int diff;
-		int freq;
-		int samphist[RTP_MAXCHAN];
+		struct rtp_resamp {
+			int nch;
+			int diff;
+			int freq;
+			int samphist[RTP_MAXCHAN];
+		} resamp;
 
 	} *src_list, *src_freelist;
 
@@ -109,6 +112,9 @@ struct rtp {
 	int blksz;
 	int quota;
 	size_t bps, nch, bufsz;
+
+	size_t tmpbuf_max;
+	int *tmpbuf;
 };
 
 void logx(const char *fmt, ...) __attribute__((__format__ (printf, 1, 2)));
@@ -220,6 +226,43 @@ static void rtp_quota_acct(struct rtp *rtp, int nsamp)
 		rtp->quota = 0;
 	else
 		rtp->quota -= nsamp;
+}
+
+void
+rtp_resamp_init(struct rtp_resamp *resamp, int nch)
+{
+	resamp->nch = nch;
+	resamp->freq = RTP_MULT;
+	resamp->diff = RTP_MULT;
+	memset(resamp->samphist, 0, sizeof(resamp->samphist));
+}
+
+void
+rtp_resamp_do(struct rtp_resamp *resamp, int *ibuf, int *obuf, size_t *picnt, size_t *pocnt)
+{
+	size_t icnt = *picnt;
+	size_t ocnt = *pocnt;
+	int j;
+
+	while (1) {
+		if (resamp->diff >= resamp->freq) {
+			if (icnt == 0)
+				break;
+			for (j = 0; j < resamp->nch; j++)
+				resamp->samphist[j] = *ibuf++;
+			resamp->diff -= resamp->freq;
+			icnt--;
+		} else {
+			if (ocnt == 0)
+				break;
+			for (j = 0; j < resamp->nch; j++)
+				*obuf++ = resamp->samphist[j];
+			resamp->diff += RTP_MULT;
+			ocnt--;
+		}
+	}
+	*picnt -= icnt;
+	*pocnt -= ocnt;
 }
 
 /*
@@ -754,7 +797,7 @@ rtp_srcoffs(struct rtp *rtp, struct rtp_src *src)
 void
 rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, int *mixbuf)
 {
-	size_t todo, j;
+	size_t todo, j, icnt, ocnt;
 	long long s, offs, avg, cnt;
 	int *q;
 
@@ -766,8 +809,7 @@ rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, int *mixbuf)
 		if (verbose)
 			logx("ssrc 0x%08x: started", src->ssrc);
 		src->started = 1;
-		src->freq = RTP_MULT;
-		src->diff = RTP_MULT;
+		rtp_resamp_init(&src->resamp, rtp->nch);
 		src->offs = RTP_MULT * rtp_srcoffs(rtp, src);
 		src->offs_target = src->offs;
 		src->offs_cnt = 0;
@@ -800,7 +842,7 @@ rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, int *mixbuf)
 		 */
 		if (resample) {
 			cnt = RTP_MULT * src->offs_cnt;
-			src->freq = src->freq *
+			src->resamp.freq = src->resamp.freq *
 			    (cnt - (src->offs - src->offs_target) / 128) /
 			    (cnt + (src->offs - offs));
 		}
@@ -809,7 +851,7 @@ rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, int *mixbuf)
 			logx("err = %+.3f / %.3f, freq = %.17f",
 			    (double)(src->offs - src->offs_target) / RTP_MULT,
 			    (double)src->offs_target / RTP_MULT,
-			    (double)src->freq / RTP_MULT);
+			    (double)src->resamp.freq / RTP_MULT);
 		}
 
 		src->offs_cnt = 0;
@@ -819,40 +861,43 @@ rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, int *mixbuf)
 	/*
 	 * Resample and add the data to 'mixbuf'.
 	 */
+	q = rtp->tmpbuf;
 	while (todo > 0) {
-		if (src->diff >= src->freq) {
-			if (src->buf_used == 0) {
-				if (verbose)
-					logx("ssrc 0x%08x: stopped", src->ssrc);
-				rtp_dropsrc(rtp, src);
-				break;
-			}
-
-			q = src->buf + src->buf_start * rtp->nch;
-			for (j = 0; j < rtp->nch; j++) {
-				src->samphist[j] = q[j];
-			}
-
-			src->buf_used--;
-			src->buf_start++;
-			if (src->buf_start >= src->buf_len)
-				src->buf_start -= src->buf_len;
-
-			src->diff -= src->freq;
-		} else {
-			for (j = 0; j < rtp->nch; j++) {
-				s = src->samphist[j] + mixbuf[j];
-				if (s > INT_MAX)
-					s = INT_MAX;
-				if (s < -INT_MAX)
-					s = -INT_MAX;
-				mixbuf[j] = s;
-			}
-			mixbuf += play_nch;
-
-			src->diff += RTP_MULT;
-			todo--;
+		if (src->buf_used == 0) {
+			if (verbose)
+				logx("ssrc 0x%08x: stopped", src->ssrc);
+			rtp_dropsrc(rtp, src);
+			break;
 		}
+		icnt = src->buf_len - src->buf_start;
+		if (icnt > src->buf_used)
+			icnt = src->buf_used;
+		ocnt = todo;
+
+		rtp_resamp_do(&src->resamp,
+		    src->buf + src->buf_start * src->resamp.nch, q,
+		    &icnt, &ocnt);
+
+		src->buf_used -= icnt;
+		src->buf_start += icnt;
+		if (src->buf_start >= src->buf_len)
+			src->buf_start -= src->buf_len;
+
+		q += ocnt * src->resamp.nch;
+		todo -= ocnt;
+	}
+
+	q = rtp->tmpbuf;
+	for (todo = rtp->blksz; todo > 0; todo--) {
+		for (j = 0; j < src->resamp.nch; j++) {
+			s = *q++ + mixbuf[j];
+			if (s > INT_MAX)
+				s = INT_MAX;
+			if (s < -INT_MAX)
+				s = -INT_MAX;
+			mixbuf[j] = s;
+		}
+		mixbuf += play_nch;
 	}
 }
 
@@ -946,6 +991,18 @@ rtp_start(struct rtp *rtp, unsigned int bits, unsigned int nch, unsigned int rat
 	rtp->nch = nch;
 	rtp->rate = rate;
 	rtp->maxsrc = maxsrc;
+
+	/*
+	 * Assume the resampler adjusts at most by 1%,
+	 * plus one partial sample
+	 */
+	rtp->tmpbuf_max = (rtp->blksz * 101 + 99) / 100 + 1;
+
+	rtp->tmpbuf = malloc(sizeof(int) * rtp->nch * rtp->tmpbuf_max);
+	if (rtp->tmpbuf == NULL) {
+		perror("src");
+		exit(1);
+	}
 
 	for (i = 0; i < rtp->maxsrc; i++) {
 		src = malloc(sizeof(struct rtp_src));
