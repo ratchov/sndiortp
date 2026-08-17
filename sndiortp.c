@@ -41,6 +41,9 @@
 #define RTP_MAXCHAN		64
 #define RTP_MULT		0x10000000
 
+#define RTP_RESAMP_MAX		((int)(RTP_MULT * 129LL / 128))
+#define RTP_RESAMP_MIN		((int)(RTP_MULT * 127LL / 128))
+
 struct rtp_hdr {
 #define RTP_VERSION		14
 #define RTP_VERSION_MASK	0x3
@@ -347,6 +350,21 @@ rtp_resamp_do(struct rtp_resamp *resamp, int *ibuf, int *obuf, size_t *picnt, si
 	}
 	*picnt -= icnt;
 	*pocnt -= ocnt;
+}
+
+void
+rtp_resamp_adjratio(struct rtp_resamp *resamp, int delta)
+{
+	int freq;
+
+	freq = resamp->freq += delta;
+
+	if (freq > RTP_RESAMP_MAX)
+		freq = RTP_RESAMP_MAX;
+	else if (freq < RTP_RESAMP_MIN)
+		freq = RTP_RESAMP_MIN;
+
+	resamp->freq = freq;
 }
 
 void
@@ -922,7 +940,7 @@ rtp_dst_sendblk(struct rtp *rtp, struct rtp_dst *dst, int *data)
 		df = rtp_corr_freqdiff(rtp, &dst->offs, rtp_dstoffs(rtp, dst));
 
 		if (resample)
-			dst->resamp.freq -= df;
+			rtp_resamp_adjratio(&dst->resamp, -df);
 
 		if (verbose >= 2) {
 			/*
@@ -1039,7 +1057,7 @@ rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, int *mixbuf)
 		df = rtp_corr_freqdiff(rtp, &src->offs, rtp_srcoffs(rtp, src));
 
 		if (resample)
-			src->resamp.freq += df;
+			rtp_resamp_adjratio(&src->resamp, df);
 
 		if (verbose >= 2) {
 			/*
@@ -1195,10 +1213,11 @@ rtp_start(struct rtp *rtp, unsigned int bits, unsigned int nch, unsigned int rat
 	rtp->maxsrc = maxsrc;
 
 	/*
-	 * Assume the resampler adjusts at most by 1%,
-	 * plus one partial sample
+	 * Assume the resampler adjusts at most by RTP_RESAMP_MAX, and add
+	 * one extra sample to handle partial samples
 	 */
-	rtp->tmpbuf_max = (rtp->blksz * 101 + 99) / 100 + 1;
+	rtp->tmpbuf_max = ((long long)rtp->blksz * RTP_RESAMP_MAX +
+	    RTP_MULT - 1) / RTP_MULT + 1;
 
 	rtp->tmpbuf = malloc(sizeof(int) * rtp->nch * rtp->tmpbuf_max);
 	if (rtp->tmpbuf == NULL) {
