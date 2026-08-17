@@ -893,7 +893,18 @@ rtp_dstoffs(struct rtp *rtp, struct rtp_dst *dst)
 	if (src == NULL)
 		return 0;
 
-	return (long long)(rtp_src_ts(rtp, src) - rtp_dst_ts(rtp, dst)) * RTP_MULT;
+	/*
+	 * This just a more pricise version of:
+	 *
+	 *	RTP_MULT * (rtp_src_ts() - rtp_dst_ts())
+	 *
+	 * using above formulas instead of calling rtp_xxx_ts().
+	 *
+	 * Note the cast to `int` below: both `ts` may wrap but their
+	 * difference is always valid provided it is interpred as signed.
+	 */
+	return (long long)RTP_MULT * (int)(src->ts - dst->ts) -
+	    RTP_MULT * ((src->time - dst->time) * rtp->rate + 500000000LL) / 1000000000ULL;
 }
 
 /*
