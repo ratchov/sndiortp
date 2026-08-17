@@ -385,10 +385,12 @@ rtp_refclk_reset(struct rtp *rtp)
 	for (dst = rtp->dst_list; dst != NULL; dst = dst->next)
 		dst->started = 0;
 
-	if (src == NULL)
-		logx("%s: no clock", __func__);
-	else
-		logx("%s: ssrc 0x08%x: new clock", __func__, src->ssrc);
+	if (verbose) {
+		if (src == NULL)
+			logx("clock is gone");
+		else
+			logx("new clock: ssrc 0x08%x", src->ssrc);
+	}
 
 	rtp->refclk = src;
 }
@@ -855,7 +857,7 @@ rtp_dst_sendpkt(struct rtp *rtp, struct rtp_dst *dst, void *data, unsigned int c
 		exit(1);
 	}
 	if (verbose >= 3)
-		logx("sent %d samples", count);
+		logx("ssrc 0x%08x: sent %d samples", dst->ssrc, count);
 }
 
 int
@@ -958,10 +960,9 @@ rtp_dst_sendblk(struct rtp *rtp, struct rtp_dst *dst, int *data)
 			 * To plot them with gnuplot, the following one-liner
 			 * could be used
 			 *
-			 *      grep dst-resamp: | sed 's/: resamp://g'
-			 *
+			 *      grep resamp: | sed 's/: resamp:[^:]+://g'
 			 */
-			logx("dst-resamp: %+.12f %+7.3f",
+			logx("resamp: ssrc 0x%08x: %+.12f %+7.3f", dst->ssrc,
 			    (double)(dst->resamp.freq - RTP_MULT) / RTP_MULT,
 			    (double)(dst->offs.val - dst->offs.target) / RTP_MULT);
 		}
@@ -985,7 +986,7 @@ rtp_dst_sendblk(struct rtp *rtp, struct rtp_dst *dst, int *data)
 	maxpktsz = (nsamp + npkt - 1) / npkt;
 
 	if (verbose >= 3)
-		logx("sending %d bytes (%d pkts)", nsamp * bpf, npkt);
+		logx("ssrc 0x%08x: sending %d bytes (%d pkts)", dst->ssrc, nsamp * bpf, npkt);
 
 	q = rtp->tmpbuf;
 	while (nsamp > 0) {
@@ -1075,10 +1076,9 @@ rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, int *mixbuf)
 			 * To plot them with gnuplot, the following one-liner
 			 * could be used
 			 *
-			 *      grep src-resamp: | sed 's/: resamp://g'
-			 *
+			 *      grep resamp: | sed 's/: resamp:[^:]+://g'
 			 */
-			logx("src-resamp: %+.12f %+7.3f",
+			logx("resamp: ssrc 0x%08x: %+.12f %+7.3f", src->ssrc,
 			    (double)(src->resamp.freq - RTP_MULT) / RTP_MULT,
 			    (double)(src->offs.val - src->offs.target) / RTP_MULT);
 		}
