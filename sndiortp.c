@@ -884,7 +884,7 @@ rtp_mixsrc(struct rtp *rtp, struct rtp_src *src, int *mixbuf)
 		if (src->buf_used < rtp->bufsz)
 			return;
 		if (verbose)
-			logx("ssrc 0x%08x: started", src->ssrc);
+			logx("ssrc 0x%08x: started, ts = %u", src->ssrc, src->ts);
 		src->started = 1;
 		rtp_resamp_init(&src->resamp, rtp->nch);
 		rtp_corr_init(rtp, &src->offs, rtp_srcoffs(rtp, src));
