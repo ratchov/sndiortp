@@ -743,72 +743,64 @@ rtp_recvpkt(struct rtp *rtp, struct rtp_sock *sock)
 }
 
 /*
- * Send the given RTP payload to all RTP destinations.
+ * Send the given RTP payload to the RTP destination.
  */
 void
-rtp_sendpkt(struct rtp *rtp, void *data, unsigned int count)
+rtp_dst_sendpkt(struct rtp *rtp, struct rtp_dst *dst, void *data, unsigned int count)
 {
-	struct rtp_dst *dst;
 	struct rtp_hdr hdr;
 	struct msghdr msg;
 	struct iovec iov[2];
 	size_t size;
 	ssize_t n;
-	int dropped = 0;
 
-	for (dst = rtp->dst_list; dst != NULL; dst = dst->next) {
+	size = count * rtp->bps * rtp->nch;
 
-		size = count * rtp->bps * rtp->nch;
+	hdr.flags = htons(2 << RTP_VERSION | 96 << RTP_PAYLOAD);
+	hdr.seq = htons(dst->seq);
+	hdr.ts = htonl(dst->ts);
+	hdr.ssrc = htonl(dst->ssrc);
 
-		hdr.flags = htons(2 << RTP_VERSION | 96 << RTP_PAYLOAD);
-		hdr.seq = htons(dst->seq);
-		hdr.ts = htonl(dst->ts);
-		hdr.ssrc = htonl(dst->ssrc);
+	dst->seq++;
+	dst->ts += count;
 
-		dst->seq++;
-		dst->ts += count;
+	iov[0].iov_base = &hdr;
+	iov[0].iov_len = sizeof(struct rtp_hdr);
+	iov[1].iov_base = data;
+	iov[1].iov_len = size;
 
-		iov[0].iov_base = &hdr;
-		iov[0].iov_len = sizeof(struct rtp_hdr);
-		iov[1].iov_base = data;
-		iov[1].iov_len = size;
+	memset(&msg, 0, sizeof(msg));
+	msg.msg_name = &dst->sock->sa;
+	msg.msg_namelen = dst->sock->salen;
+	msg.msg_control = NULL;
+	msg.msg_controllen = 0;
+	msg.msg_iov = iov;
+	msg.msg_iovlen = 2;
 
-		memset(&msg, 0, sizeof(msg));
-		msg.msg_name = &dst->sock->sa;
-		msg.msg_namelen = dst->sock->salen;
-		msg.msg_control = NULL;
-		msg.msg_controllen = 0;
-		msg.msg_iov = iov;
-		msg.msg_iovlen = 2;
-
-		n = sendmsg(dst->sock->fd, &msg, MSG_DONTWAIT);
-		if (n == -1) {
-			if (errno != EAGAIN) {
-				logx("sendmsg: %s", strerror(errno));
-				exit(1);
-			}
-			dropped++;
-			continue;
-		}
-		if (msg.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) {
-			logx("sendmsg: truncated");
+	n = sendmsg(dst->sock->fd, &msg, MSG_DONTWAIT);
+	if (n == -1) {
+		if (errno != EAGAIN) {
+			logx("sendmsg: %s", strerror(errno));
 			exit(1);
 		}
-	}
-	if (dropped > 0) {
 		if (verbose)
-			logx("dropped %d pkts", dropped);
+			logx("dropped pkt");
+		return;
+	}
+	if (msg.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) {
+		logx("sendmsg: truncated");
+		exit(1);
 	}
 	if (verbose >= 3)
 		logx("sent %d samples", count);
 }
 
 /*
- * Send the given block of audio samples to all RTP destinations,
+ * Send the given block of audio samples to the RTP destination,
  * possibly splitting the block into multiple packets.
  */
 void
-rtp_sendblk(struct rtp *rtp, int *data)
+rtp_dst_sendblk(struct rtp *rtp, struct rtp_dst *dst, int *data)
 {
 	unsigned char pktdata[RTP_MAXDATA];
 	unsigned char *p;
@@ -844,10 +836,19 @@ rtp_sendblk(struct rtp *rtp, int *data)
 			q += rec_nch - rtp->nch;
 		}
 
-		rtp_sendpkt(rtp, pktdata, pktsz);
+		rtp_dst_sendpkt(rtp, dst, pktdata, pktsz);
 		nsamp -= pktsz;
 		data += pktsz;
 	}
+}
+
+void
+rtp_sendblk(struct rtp *rtp, int *data)
+{
+	struct rtp_dst *dst;
+
+	for (dst = rtp->dst_list; dst != NULL; dst = dst->next)
+		rtp_dst_sendblk(rtp, dst, data);
 }
 
 /*
