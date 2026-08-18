@@ -71,7 +71,7 @@ audio device.
 Default is
 .Pa default .
 .It Fl l No rtp:// Ns Oo Ar address Oc Ns Op : Ns Ar port
-Accept RTP streams on the given local network address.
+Accept RTP streams on the given local network address or multicast group.
 If no
 .Ar address
 is provided, then
@@ -122,6 +122,16 @@ $ sndiortp -l rtp://:5120
 Send recorded data to 192.168.0.1 and 192.168.0.2 port 5120:
 .Bd -literal -offset indent
 $ sndiortp rtp://192.168.0.1:5120 rtp://192.168.0.2:5120
+.Ed
+.Pp
+Send recorded data to the 239.0.0.1 multicast group:
+.Bd -literal -offset indent
+$ sndiortp rtp://239.0.0.1
+.Ed
+.Pp
+Join the 239.0.0.1 multicast group and play received data:
+.Bd -literal -offset indent
+$ sndiortp -l rtp://239.0.0.1
 .Ed
 .Sh SEE ALSO
 .Xr sndio 7

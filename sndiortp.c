@@ -467,6 +467,7 @@ void
 rtp_bind(struct rtp *rtp, const char *host, const char *serv)
 {
 	struct addrinfo *ailist, *ai, aihints;
+	struct ip_mreq mreq;
 	struct rtp_sock *sock;
 	int error;
 
@@ -490,6 +491,22 @@ rtp_bind(struct rtp *rtp, const char *host, const char *serv)
 
 		sock = rtp_addsock(rtp, &rtp->recv_sock_list,
 		    ai->ai_family, ai->ai_addr, ai->ai_addrlen);
+
+		if (ai->ai_family == AF_INET) {
+			struct sockaddr_in *sin = (struct sockaddr_in *)ai->ai_addr;
+			in_addr_t addr = ntohl(sin->sin_addr.s_addr);
+
+			if (IN_MULTICAST(addr)) {
+				mreq.imr_multiaddr.s_addr = htonl(addr);
+				mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+				if (setsockopt(sock->fd, IPPROTO_IP,
+					IP_ADD_MEMBERSHIP, (char *)&mreq,
+					sizeof(mreq)) == -1) {
+					logx("%s: IP_ADD_MEMBERSHIP: %s", host, strerror(errno));
+					exit(1);
+				}
+			}
+		}
 
 		if (bind(sock->fd, ai->ai_addr, ai->ai_addrlen) == -1) {
 			logx("bind: %s", strerror(errno));
