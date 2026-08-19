@@ -940,7 +940,7 @@ rtp_dst_sendblk(struct rtp *rtp, struct rtp_dst *dst, int *data)
 	unsigned int npkt, pktsz, nsamp, maxsamp, maxpktsz;
 	unsigned int bpf;
 	int i, c, s;
-	int ts, df;
+	int df;
 
 	if (!dst->started) {
 		/*
