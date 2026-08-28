@@ -19,9 +19,9 @@ Send recorded data to 192.168.0.1 port 5120:
 
 	sndiortp rtp://192.168.0.1:5120
 
-Receive RTP streams on port 5120 and play the resulting mix:
+Join the 239.0.0.1 multicast group and play received data:
 
-	sndiortp -l rtp://:5120
+	sndiortp -l rtp://239.0.0.1
 
 ## Installation
 
