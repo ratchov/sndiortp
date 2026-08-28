@@ -10,9 +10,6 @@ play the result on the device.
 
 Only 16-bit or 24-bit PCM payload is supported.
 
-This utility is mainly intended to test RTP capable audio equipment but
-it may also be used to broadcast audio over a fast local area network.
-
 ## Examples
 
 Send recorded data to 192.168.0.1 port 5120:
